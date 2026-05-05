@@ -1,4 +1,4 @@
-# RaspberryFluke
+# **RaspberryFluke**
 
 A pocket-sized network diagnostic tool that displays switch port information using a Raspberry Pi Zero 2 W, a PoE HAT, and an e-Paper display.
 
@@ -116,7 +116,7 @@ If no switch data is received within 120 seconds, the display shows "No active n
 
 ---
 
-## Installation
+## **Installation**
 
 ### Step 1. Flash the SD card
 
@@ -258,6 +258,68 @@ Cloud-init lockout:
 
 ---
 
+## Read-Only Filesystem (**Recommended**)
+
+RaspberryFluke is designed to be unplugged from PoE at any moment without warning. On a standard read-write filesystem, a hard power cut during a disk write can corrupt the SD card over time. Enabling the read-only filesystem eliminates this risk entirely.
+
+When read-only is enabled:
+- The root filesystem (OS and code) is mounted read-only — the SD card cannot be corrupted by a hard power cut
+- A 256MB writable image file (`/boot/firmware/rfdata.img`) is mounted at `/data` for port history storage
+- All other runtime writes (logs, temp files, DHCP leases) go to RAM and are lost on power cut — this is safe and intentional
+- The device boots and operates identically from the user's perspective
+
+### Enabling read-only
+
+Run this **once** after `install.sh` has completed and the device is confirmed working. Use a stable power source — **not PoE** — while this script runs.
+
+```bash
+sudo bash /opt/raspberryfluke/make_readonly.sh
+```
+
+Type `YES` when prompted. The script will configure the filesystem, create the writable data image, and reboot automatically.
+
+### Verifying read-only is active
+
+After rebooting, confirm the root filesystem is mounted read-only:
+
+```bash
+mount | grep "on / "
+```
+
+The output should include `ro` in the mount options:
+
+/dev/mmcblk0p2 on / type ext4 (ro,noatime)
+
+Also confirm `/data` is writable:
+
+```bash
+mount | grep "/data"
+```
+
+Should show:
+
+/boot/firmware/rfdata.img on /data type ext4 (rw,noatime)
+
+### Updating the device after read-only is enabled
+
+To pull code updates, temporarily remount the root filesystem as writable:
+
+```bash
+sudo remount-rw
+cd /opt/raspberryfluke
+sudo git pull
+sudo remount-ro
+sudo reboot
+```
+
+Always reboot after remounting read-only to ensure a clean state.
+
+### How the writable /data area works
+
+Rather than creating a new partition (which would require shrinking the root partition — a risky operation), RaspberryFluke uses a file-based approach. A 256MB ext4 image file is created at `/boot/firmware/rfdata.img`. The boot partition is always writable even when the root is read-only, so this file persists safely. Linux mounts it as a loop device at `/data` on every boot. The end result is identical to a dedicated partition from the application's perspective.
+
+---
+
 ## Configuration
 
 Optional settings can be adjusted in `/opt/raspberryfluke/rfconfig.py`:
@@ -346,68 +408,6 @@ Example output:
 ```
 
 > **Note:** The Pi Zero 2W has no hardware real-time clock. Timestamps are set by NTP after the device gets a network connection. On networks without internet access, timestamps may not be accurate.
-
----
-
-## Read-Only Filesystem (Recommended)
-
-RaspberryFluke is designed to be unplugged from PoE at any moment without warning. On a standard read-write filesystem, a hard power cut during a disk write can corrupt the SD card over time. Enabling the read-only filesystem eliminates this risk entirely.
-
-When read-only is enabled:
-- The root filesystem (OS and code) is mounted read-only — the SD card cannot be corrupted by a hard power cut
-- A 256MB writable image file (`/boot/firmware/rfdata.img`) is mounted at `/data` for port history storage
-- All other runtime writes (logs, temp files, DHCP leases) go to RAM and are lost on power cut — this is safe and intentional
-- The device boots and operates identically from the user's perspective
-
-### Enabling read-only
-
-Run this **once** after `install.sh` has completed and the device is confirmed working. Use a stable power source — **not PoE** — while this script runs.
-
-```bash
-sudo bash /opt/raspberryfluke/make_readonly.sh
-```
-
-Type `YES` when prompted. The script will configure the filesystem, create the writable data image, and reboot automatically.
-
-### Verifying read-only is active
-
-After rebooting, confirm the root filesystem is mounted read-only:
-
-```bash
-mount | grep "on / "
-```
-
-The output should include `ro` in the mount options:
-
-/dev/mmcblk0p2 on / type ext4 (ro,noatime)
-
-Also confirm `/data` is writable:
-
-```bash
-mount | grep "/data"
-```
-
-Should show:
-
-/boot/firmware/rfdata.img on /data type ext4 (rw,noatime)
-
-### Updating the device after read-only is enabled
-
-To pull code updates, temporarily remount the root filesystem as writable:
-
-```bash
-sudo remount-rw
-cd /opt/raspberryfluke
-sudo git pull
-sudo remount-ro
-sudo reboot
-```
-
-Always reboot after remounting read-only to ensure a clean state.
-
-### How the writable /data area works
-
-Rather than creating a new partition (which would require shrinking the root partition — a risky operation), RaspberryFluke uses a file-based approach. A 256MB ext4 image file is created at `/boot/firmware/rfdata.img`. The boot partition is always writable even when the root is read-only, so this file persists safely. Linux mounts it as a loop device at `/data` on every boot. The end result is identical to a dedicated partition from the application's perspective.
 
 ---
 
