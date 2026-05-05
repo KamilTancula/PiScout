@@ -1,4 +1,4 @@
-# **RaspberryFluke**
+# RaspberryFluke
 
 A pocket-sized network diagnostic tool that displays switch port information using a Raspberry Pi Zero 2 W, a PoE HAT, and an e-Paper display.
 
@@ -132,8 +132,13 @@ During the imaging process, configure the following in Raspberry Pi Imager's set
 Insert the SD card, connect power, and SSH into the device. Then update the system:
 
 ```bash
-sudo apt update && sudo apt upgrade -y
+sudo apt update
 ```
+
+```bash
+sudo apt upgrade -y
+```
+
 
 ### Step 3. Install git
 
@@ -153,6 +158,9 @@ sudo git clone https://github.com/MKWB/RaspberryFluke.git /opt/raspberryfluke
 
 ```bash
 cd /opt/raspberryfluke
+```
+
+```bash
 sudo bash install.sh
 ```
 
@@ -170,94 +178,6 @@ sudo systemctl status raspberryfluke.service
 
 The service should show `active (running)`. RaspberryFluke will now start automatically on every boot.
 
-
-## What install.sh Does
-
-#### Before starting
-- Confirms it is being run as root — refuses to proceed if not
-- Confirms RaspberryFluke files exist in `/opt/raspberryfluke` — refuses to proceed if the repo was not cloned first
-
-#### Step 1 — System packages
-Installs the following via `apt-get`:
-- `git` — for cloning repositories
-- `python3` and `python3-pip` — Python runtime
-- `python3-pil` — image rendering for the e-paper display
-- `python3-lgpio` and `python3-rpi.gpio` — GPIO pin control for the e-paper HAT
-- `fonts-dejavu-core` — the font used on the display
-- `snmp` — provides `snmpget` and `snmpwalk` for active switch discovery
-
-#### Step 2 — Boot time optimizations
-
-Hardware changes written to `/boot/firmware/config.txt`:
-- Disables Bluetooth (not needed, saves 3-5 seconds)
-- Disables WiFi (not needed, saves 2-3 seconds)
-- Enables HDMI blanking (headless device, saves 1-2 seconds)
-- Disables the rainbow boot splash screen
-- Removes the artificial 1-second boot delay
-
-Kernel command line changes written to `/boot/firmware/cmdline.txt`:
-- Redirects console output to tty3 (an unused virtual terminal)
-- Adds `quiet loglevel=0` to suppress kernel boot messages
-- Removes the serial console (`console=serial0`) which causes delays after Bluetooth is disabled
-
-Services masked (permanently disabled, never start):
-- `triggerhappy` — input event daemon, not needed
-- `apt-daily` and `apt-daily-upgrade` timers — automatic update checks
-- `man-db` timer — man page indexing
-- `NetworkManager` and `NetworkManager-wait-online` — replaced by systemd-networkd
-- All `cloud-init` services — cloud provisioning tool with no purpose on this device
-
-Network manager replacement:
-- Disables NetworkManager (was consuming 13-14 seconds of boot time)
-- Enables `systemd-networkd` (starts in under 200ms)
-- Creates `/etc/systemd/network/10-eth0.network` — configures DHCP on eth0
-
-Cloud-init lockout:
-- Creates `/etc/cloud/cloud-init.disabled` — prevents cloud-init from running even if service masks are removed
-
-#### Step 3 — SPI interface
-- Checks if SPI is already enabled
-- If not, adds `dtparam=spi=on` to `config.txt`
-- SPI is required for the e-paper display to communicate with the Pi
-
-#### Step 4 — udev rule
-- Creates `/etc/udev/rules.d/99-raspberryfluke-eth0.rules`
-- Fires the instant the kernel detects a cable plugged in
-- Immediately sets eth0 to up and promiscuous mode before any other service reacts
-- Promiscuous mode is required to receive LLDP and CDP multicast frames
-- Reloads udev rules immediately
-
-#### Step 5 — Journal persistence
-- Creates `/var/log/journal/` to enable persistent log storage
-- Configures `Storage=persistent` so logs survive reboots and hard power cuts
-- Sets `SyncIntervalSec=10s` so at most 10 seconds of logs are lost on a hard power cut
-
-#### Step 6 — Waveshare e-Paper library
-- Clones the official Waveshare e-Paper repository to `/opt/waveshare-epaper`
-- Copies only the Python driver folder (`waveshare_epd/`) into `/opt/raspberryfluke/`
-- Deletes the full Waveshare clone after copying
-
-#### Step 7 — File permissions
-- Sets ownership of all files in `/opt/raspberryfluke/` to root
-- Makes `main.py` executable
-
-#### Step 8 — Data directory
-- Creates `/data/raspberryfluke/` for port history storage
-- This directory is used by history logging (modes 1 and 2)
-- On devices with read-only filesystem enabled, this directory is backed by a persistent image file on the boot partition
-
-#### Step 9 — Systemd service
-- Copies `raspberryfluke.service` to `/etc/systemd/system/`
-- Reloads systemd
-- Enables the service to start on every boot
-- Starts the service immediately
-
-#### At the end
-- Prints a completion summary
-- Warns that a reboot is required for hardware changes to take effect
-
----
-
 ## Read-Only Filesystem (**Recommended**)
 
 RaspberryFluke is designed to be unplugged from PoE at any moment without warning. On a standard read-write filesystem, a hard power cut during a disk write can corrupt the SD card over time. Enabling the read-only filesystem eliminates this risk entirely.
@@ -268,7 +188,7 @@ When read-only is enabled:
 - All other runtime writes (logs, temp files, DHCP leases) go to RAM and are lost on power cut — this is safe and intentional
 - The device boots and operates identically from the user's perspective
 
-### Enabling read-only
+### Step 1. Enabling read-only
 
 Run this **once** after `install.sh` has completed and the device is confirmed working. Use a stable power source — **not PoE** — while this script runs.
 
@@ -278,7 +198,7 @@ sudo bash /opt/raspberryfluke/make_readonly.sh
 
 Type `YES` when prompted. The script will configure the filesystem, create the writable data image, and reboot automatically.
 
-### Verifying read-only is active
+### Step 2. Verifying read-only is active
 
 After rebooting, confirm the root filesystem is mounted read-only:
 
@@ -317,6 +237,93 @@ Always reboot after remounting read-only to ensure a clean state.
 ### How the writable /data area works
 
 Rather than creating a new partition (which would require shrinking the root partition — a risky operation), RaspberryFluke uses a file-based approach. A 256MB ext4 image file is created at `/boot/firmware/rfdata.img`. The boot partition is always writable even when the root is read-only, so this file persists safely. Linux mounts it as a loop device at `/data` on every boot. The end result is identical to a dedicated partition from the application's perspective.
+
+---
+
+## What install.sh Does
+
+#### Before starting
+- Confirms it is being run as root — refuses to proceed if not
+- Confirms RaspberryFluke files exist in `/opt/raspberryfluke` — refuses to proceed if the repo was not cloned first
+
+##### Step 1. — System packages
+Installs the following via `apt-get`:
+- `git` — for cloning repositories
+- `python3` and `python3-pip` — Python runtime
+- `python3-pil` — image rendering for the e-paper display
+- `python3-lgpio` and `python3-rpi.gpio` — GPIO pin control for the e-paper HAT
+- `fonts-dejavu-core` — the font used on the display
+- `snmp` — provides `snmpget` and `snmpwalk` for active switch discovery
+
+##### Step 2. — Boot time optimizations
+
+Hardware changes written to `/boot/firmware/config.txt`:
+- Disables Bluetooth (not needed, saves 3-5 seconds)
+- Disables WiFi (not needed, saves 2-3 seconds)
+- Enables HDMI blanking (headless device, saves 1-2 seconds)
+- Disables the rainbow boot splash screen
+- Removes the artificial 1-second boot delay
+
+Kernel command line changes written to `/boot/firmware/cmdline.txt`:
+- Redirects console output to tty3 (an unused virtual terminal)
+- Adds `quiet loglevel=0` to suppress kernel boot messages
+- Removes the serial console (`console=serial0`) which causes delays after Bluetooth is disabled
+
+Services masked (permanently disabled, never start):
+- `triggerhappy` — input event daemon, not needed
+- `apt-daily` and `apt-daily-upgrade` timers — automatic update checks
+- `man-db` timer — man page indexing
+- `NetworkManager` and `NetworkManager-wait-online` — replaced by systemd-networkd
+- All `cloud-init` services — cloud provisioning tool with no purpose on this device
+
+Network manager replacement:
+- Disables NetworkManager (was consuming 13-14 seconds of boot time)
+- Enables `systemd-networkd` (starts in under 200ms)
+- Creates `/etc/systemd/network/10-eth0.network` — configures DHCP on eth0
+
+Cloud-init lockout:
+- Creates `/etc/cloud/cloud-init.disabled` — prevents cloud-init from running even if service masks are removed
+
+##### Step 3. — SPI interface
+- Checks if SPI is already enabled
+- If not, adds `dtparam=spi=on` to `config.txt`
+- SPI is required for the e-paper display to communicate with the Pi
+
+##### Step 4. — udev rule
+- Creates `/etc/udev/rules.d/99-raspberryfluke-eth0.rules`
+- Fires the instant the kernel detects a cable plugged in
+- Immediately sets eth0 to up and promiscuous mode before any other service reacts
+- Promiscuous mode is required to receive LLDP and CDP multicast frames
+- Reloads udev rules immediately
+
+##### Step 5. — Journal persistence
+- Creates `/var/log/journal/` to enable persistent log storage
+- Configures `Storage=persistent` so logs survive reboots and hard power cuts
+- Sets `SyncIntervalSec=10s` so at most 10 seconds of logs are lost on a hard power cut
+
+##### Step 6. — Waveshare e-Paper library
+- Clones the official Waveshare e-Paper repository to `/opt/waveshare-epaper`
+- Copies only the Python driver folder (`waveshare_epd/`) into `/opt/raspberryfluke/`
+- Deletes the full Waveshare clone after copying
+
+##### Step 7. — File permissions
+- Sets ownership of all files in `/opt/raspberryfluke/` to root
+- Makes `main.py` executable
+
+##### Step 8. — Data directory
+- Creates `/data/raspberryfluke/` for port history storage
+- This directory is used by history logging (modes 1 and 2)
+- On devices with read-only filesystem enabled, this directory is backed by a persistent image file on the boot partition
+
+##### Step 9. — Systemd service
+- Copies `raspberryfluke.service` to `/etc/systemd/system/`
+- Reloads systemd
+- Enables the service to start on every boot
+- Starts the service immediately
+
+##### At the end
+- Prints a completion summary
+- Warns that a reboot is required for hardware changes to take effect
 
 ---
 
