@@ -151,7 +151,7 @@ sudo apt install git -y
 ### Step 4. Clone the repository
 
 ```bash
-sudo git clone https://github.com/MKWB/RaspberryFluke.git /opt/raspberryfluke
+sudo git clone -b feature/modular-raw-capture https://github.com/MKWB/RaspberryFluke.git /opt/raspberryfluke
 ```
 
 ### Step 5. Run the installer
