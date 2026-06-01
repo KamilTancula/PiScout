@@ -1,0 +1,49 @@
+[Unit]
+Description=PiScout network discovery display service
+# Use network-pre.target instead of network.target so the service starts
+# as soon as the network interface exists, without waiting for a full
+# network stack (DHCP lease, DNS, etc.) to be ready. PiScout
+# manages its own DHCP awareness via /proc/net/route polling.
+After=sysinit.target local-fs.target
+Wants=network-pre.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/piscout
+Environment=PYTHONPATH=/opt/piscout
+ExecStart=/usr/bin/python3 /opt/piscout/main.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Route all output to the systemd journal.
+StandardOutput=journal
+StandardError=journal
+
+# Systemd hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# Allow writes to the writable data partition for history logging.
+# /opt/piscout is read-only on production devices.
+# /data/piscout is the writable partition for port history and debug logs.
+ReadWritePaths=/data/piscout
+
+# AF_PACKET  is required for raw socket capture (capture_raw.py, trigger.py).
+# AF_UNIX    is required for general Python runtime communication.
+# AF_NETLINK is required for network interface queries.
+# AF_INET    is required for SNMP UDP queries and DHCP socket operations.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET AF_INET
+
+[Install]
+WantedBy=multi-user.target
