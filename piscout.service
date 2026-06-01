@@ -1,8 +1,8 @@
 [Unit]
-Description=RaspberryFluke network discovery display service
+Description=PiScout network discovery display service
 # Use network-pre.target instead of network.target so the service starts
 # as soon as the network interface exists, without waiting for a full
-# network stack (DHCP lease, DNS, etc.) to be ready. RaspberryFluke
+# network stack (DHCP lease, DNS, etc.) to be ready. PiScout
 # manages its own DHCP awareness via /proc/net/route polling.
 After=sysinit.target local-fs.target
 Wants=network-pre.target
@@ -11,9 +11,9 @@ Wants=network-pre.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/raspberryfluke
-Environment=PYTHONPATH=/opt/raspberryfluke
-ExecStart=/usr/bin/python3 /opt/raspberryfluke/main.py
+WorkingDirectory=/opt/piscout
+Environment=PYTHONPATH=/opt/piscout
+ExecStart=/usr/bin/python3 /opt/piscout/main.py
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15
@@ -35,9 +35,9 @@ RestrictSUIDSGID=true
 RemoveIPC=true
 
 # Allow writes to the writable data partition for history logging.
-# /opt/raspberryfluke is read-only on production devices.
-# /data/raspberryfluke is the writable partition for port history and debug logs.
-ReadWritePaths=/data/raspberryfluke
+# /opt/piscout is read-only on production devices.
+# /data/piscout is the writable partition for port history and debug logs.
+ReadWritePaths=/data/piscout
 
 # AF_PACKET  is required for raw socket capture (capture_raw.py, trigger.py).
 # AF_UNIX    is required for general Python runtime communication.

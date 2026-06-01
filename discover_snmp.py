@@ -14,8 +14,8 @@ Discovery sequence:
   3. For each working community string:
      a. GET sysName to confirm SNMP access and get the switch hostname.
      b. Find which port we are connected to via:
-        - CDP-MIB  : walk cdpCacheDeviceId to find "RaspberryFluke"
-        - LLDP-MIB : walk lldpRemSysName to find "RaspberryFluke"
+        - CDP-MIB  : walk cdpCacheDeviceId to find our hostname
+        - LLDP-MIB : walk lldpRemSysName to find our hostname
         - BRIDGE-MIB: MAC forwarding table lookup with our MAC address
      c. Retrieve port name, VLAN, and voice VLAN via IF-MIB and Cisco MIBs.
   4. Return the first complete result.
@@ -52,7 +52,7 @@ from typing import Optional
 
 import discover_arp
 import parse_utils
-import rfconfig
+import config
 
 
 log = logging.getLogger(__name__)
@@ -98,11 +98,11 @@ _OID_LLDP_LOC_PORT_DESC = "1.0.8802.1.1.2.1.3.7.1.4"
 
 def _get_communities() -> list[str]:
     """Build the ordered list of SNMP community strings to try."""
-    built_in = list(getattr(rfconfig, "SNMP_COMMUNITY_STRINGS", [
+    built_in = list(getattr(config, "SNMP_COMMUNITY_STRINGS", [
         "public", "cisco", "community", "private",
         "manager", "snmp", "monitor", "readonly",
     ]))
-    user = str(getattr(rfconfig, "SNMP_USER_COMMUNITY", "")).strip()
+    user = str(getattr(config, "SNMP_USER_COMMUNITY", "")).strip()
     if user and user not in built_in:
         return [user] + built_in
     return built_in
@@ -110,21 +110,21 @@ def _get_communities() -> list[str]:
 
 def _snmp_timeout() -> int:
     try:
-        return max(1, int(getattr(rfconfig, "SNMP_TIMEOUT", 1)))
+        return max(1, int(getattr(config, "SNMP_TIMEOUT", 1)))
     except (TypeError, ValueError):
         return 1
 
 
 def _dhcp_wait() -> float:
     try:
-        return max(1.0, float(getattr(rfconfig, "SNMP_DHCP_WAIT", 8.0)))
+        return max(1.0, float(getattr(config, "SNMP_DHCP_WAIT", 8.0)))
     except (TypeError, ValueError):
         return 8.0
 
 
 def _arp_wait() -> float:
     try:
-        return max(1.0, float(getattr(rfconfig, "SNMP_ARP_WAIT", 3.0)))
+        return max(1.0, float(getattr(config, "SNMP_ARP_WAIT", 3.0)))
     except (TypeError, ValueError):
         return 3.0
 
@@ -469,7 +469,7 @@ def _find_port_cdp_mib(
     """
     Find our port via the Cisco CDP-MIB neighbor table.
 
-    Walks cdpCacheDeviceId and finds the entry containing "RaspberryFluke".
+    Walks cdpCacheDeviceId and finds the entry matching our hostname.
     Since we send CDP triggers on link-up, the switch should add us to its
     CDP neighbor table within ~1-2 seconds of link-up.
 
@@ -477,13 +477,14 @@ def _find_port_cdp_mib(
     """
     log.debug("SNMP: trying CDP-MIB port discovery against %s", host)
 
+    hostname = socket.gethostname()
     rows = _snmp_walk(host, community, _OID_CDP_CACHE_DEVICE_ID, max_rows=100)
 
     for oid_str, device_id in rows:
         if cancel_event.is_set():
             return None
 
-        if "RaspberryFluke" not in device_id:
+        if hostname not in device_id:
             continue
 
         # OID: .1.3.6.1.4.1.9.9.23.1.2.1.1.6.<ifIndex>.<deviceIndex>
@@ -496,8 +497,8 @@ def _find_port_cdp_mib(
             continue
 
         log.debug(
-            "SNMP: CDP-MIB found RaspberryFluke at ifIndex=%d deviceIndex=%d",
-            if_index, device_index,
+            "SNMP: CDP-MIB found %s at ifIndex=%d deviceIndex=%d",
+            hostname, if_index, device_index,
         )
 
         port_name   = _snmp_get(host, community, f"{_OID_IF_DESCR}.{if_index}")
@@ -521,18 +522,19 @@ def _find_port_lldp_mib(
     """
     Find our port via the standard IEEE 802.1AB LLDP-MIB.
 
-    Walks lldpRemSysName and finds the entry for "RaspberryFluke".
+    Walks lldpRemSysName and finds the entry matching our hostname.
     Works on any LLDP-capable switch regardless of vendor.
     """
     log.debug("SNMP: trying LLDP-MIB port discovery against %s", host)
 
+    hostname = socket.gethostname()
     rows = _snmp_walk(host, community, _OID_LLDP_REM_SYS_NAME, max_rows=100)
 
     for oid_str, sys_name in rows:
         if cancel_event.is_set():
             return None
 
-        if "RaspberryFluke" not in sys_name:
+        if hostname not in sys_name:
             continue
 
         # OID: <prefix>.<timeMark>.<localPortNum>.<remoteIndex>
@@ -542,7 +544,7 @@ def _find_port_lldp_mib(
         except (IndexError, ValueError):
             continue
 
-        log.debug("SNMP: LLDP-MIB found RaspberryFluke at localPortNum=%d", local_port_num)
+        log.debug("SNMP: LLDP-MIB found %s at localPortNum=%d", hostname, local_port_num)
 
         port_desc  = _snmp_get(host, community, f"{_OID_LLDP_LOC_PORT_DESC}.{local_port_num}")
         port_name  = str(port_desc or f"port{local_port_num}").strip()
@@ -665,6 +667,7 @@ def _query_switch(
     community:    str,
     local_mac:    Optional[bytes],
     cancel_event: threading.Event,
+    option82:     Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Attempt a full SNMP discovery against the switch at gateway.
@@ -687,7 +690,7 @@ def _query_switch(
 
     # Give the switch a moment to process our CDP triggers before querying
     # the CDP neighbor table. DHCP latency usually covers this naturally.
-    time.sleep(1.0)
+    cancel_event.wait(1.0)
 
     if cancel_event.is_set():
         return None
@@ -700,6 +703,10 @@ def _query_switch(
 
     if port_info is None and not cancel_event.is_set() and local_mac:
         port_info = _find_port_bridge_mib(gateway, community, local_mac, cancel_event)
+
+    if port_info is None and option82 and option82.get("port"):
+        log.debug("SNMP: using Option 82 port as fallback on %s", gateway)
+        port_info = {"port_name": option82["port"], "vlan": "", "voice_vlan": ""}
 
     if port_info is None:
         log.debug("SNMP: could not determine port on %s with community '%s'", gateway, community)
@@ -806,11 +813,8 @@ def discover(
             if cancel_event.is_set() or time.monotonic() > deadline:
                 return None
 
-            result = _query_switch(candidate, community, local_mac, cancel_event)
+            result = _query_switch(candidate, community, local_mac, cancel_event, option82)
             if result:
-                # Merge Option 82 port data if SNMP didn't find a port.
-                if option82 and not result.get("port") and option82.get("port"):
-                    result["port"] = parse_utils.shorten_interface_name(option82["port"])
                 return result
 
     log.debug("SNMP discovery: all community strings failed on all candidates")

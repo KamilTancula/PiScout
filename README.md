@@ -1,4 +1,4 @@
-# RaspberryFluke
+# PiScout
 
 A pocket-sized network diagnostic tool that displays switch port information using a Raspberry Pi Zero 2 W, a PoE HAT, and an e-Paper display.
 
@@ -8,7 +8,7 @@ Inspired by the functionality of commercial network port identification tools us
 
 ## Overview
 
-RaspberryFluke is a portable network diagnostic tool designed to quickly identify switch port information including hostname, IP address, port number, VLAN, and voice VLAN.
+PiScout is a portable network diagnostic tool designed to quickly identify switch port information including hostname, IP address, port number, VLAN, and voice VLAN.
 
 The device plugs directly into a switch port via Ethernet. If the port has PoE enabled, it powers on automatically. Results are displayed on a low-power e-Paper screen that retains its image even when power is removed.
 
@@ -37,7 +37,7 @@ The goal was to build a practical, open-source alternative to expensive commerci
 ## Display Output
 
 ```text
-         RaspberryFluke        CDP
+           PiScout              CDP
 ─────────────────────────────────
 SW: SWITCH-01
 IP: 10.10.1.2
@@ -73,14 +73,14 @@ Connect the device to an Ethernet cable plugged into an active switch port. If P
 
 ### Boot
 
-Once powered, the Pi boots Raspberry Pi OS Lite (64-bit). Boot time optimizations applied by the installer reduce startup time to approximately 20-25 seconds. A systemd service launches the RaspberryFluke program automatically as soon as the system is ready.
+Once powered, the Pi boots Raspberry Pi OS Lite (64-bit). Boot time optimizations applied by the installer reduce startup time to approximately 20-25 seconds. A systemd service launches PiScout automatically as soon as the system is ready.
 
 ### Discovery
 
-RaspberryFluke uses a multi-path parallel discovery architecture to identify the connected switch port as quickly as possible. The following methods run simultaneously the moment a link is detected:
+PiScout uses a multi-path parallel discovery architecture to identify the connected switch port as quickly as possible. The following methods run simultaneously the moment a link is detected:
 
 **SNMP (primary — fastest)**
-If a DHCP lease is obtained, RaspberryFluke immediately queries the switch via SNMP using common community strings. It also sends ARP probes to likely switch management IPs to find the switch directly. If SNMP succeeds, results are returned in 2-5 seconds. DHCP Option 82 relay agent data is also checked opportunistically — if the switch has inserted port and VLAN information into the DHCP response, it is used immediately.
+If a DHCP lease is obtained, PiScout immediately queries the switch via SNMP using common community strings. It also sends ARP probes to likely switch management IPs to find the switch directly. If SNMP succeeds, results are returned in 2-5 seconds. DHCP Option 82 relay agent data is also checked opportunistically — if the switch has inserted port and VLAN information into the DHCP response, it is used immediately.
 
 **LLDP Passive Capture (secondary)**
 A raw AF_PACKET socket listens for IEEE 802.1AB LLDP frames broadcast by the switch. An LLDP fast-start trigger frame is sent immediately on link-up to prompt LLDP-capable switches to respond right away. Typical response time is 3-8 seconds.
@@ -92,7 +92,7 @@ The first method to return a valid result wins and its data is shown on the disp
 
 ### Partial Results
 
-Some switches — notably FortiSwitch — omit optional fields such as the port VLAN ID from their LLDP advertisements. If partial data is received (switch name and port identified but VLAN missing), RaspberryFluke will display the available information after 30 seconds rather than showing nothing. The background listener continues trying to obtain the missing fields and will update the display automatically if complete data arrives.
+Some switches — notably FortiSwitch — omit optional fields such as the port VLAN ID from their LLDP advertisements. If partial data is received (switch name and port identified but VLAN missing), PiScout will display the available information after 30 seconds rather than showing nothing. The background listener continues trying to obtain the missing fields and will update the display automatically if complete data arrives.
 
 ### Display
 
@@ -123,7 +123,7 @@ If no switch data is received within 120 seconds, the display shows "No active n
 Flash **Raspberry Pi OS Lite (64-bit)** to the SD card using [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
 
 During the imaging process, configure the following in Raspberry Pi Imager's settings:
-- Set a hostname (e.g. `raspberryfluke`)
+- Set a hostname (e.g. `piscout`)
 - Set a username and password
 - Enable SSH
 
@@ -146,13 +146,13 @@ sudo apt install git -y
 ### Step 4. Clone the repository
 
 ```bash
-sudo git clone https://github.com/MKWB/RaspberryFluke.git /opt/raspberryfluke
+sudo git clone https://github.com/MKWB/PiScout.git /opt/piscout
 ```
 
 ### Step 5. Run the installer
 
 ```bash
-cd /opt/raspberryfluke
+cd /opt/piscout
 sudo bash install.sh
 ```
 
@@ -165,17 +165,17 @@ sudo reboot
 ### Step 7. Verify
 
 ```bash
-sudo systemctl status raspberryfluke.service
+sudo systemctl status piscout.service
 ```
 
-The service should show `active (running)`. RaspberryFluke will now start automatically on every boot.
+The service should show `active (running)`. PiScout will now start automatically on every boot.
 
 
 ## What install.sh Does
 
 #### Before starting
 - Confirms it is being run as root — refuses to proceed if not
-- Confirms RaspberryFluke files exist in `/opt/raspberryfluke` — refuses to proceed if the repo was not cloned first
+- Confirms PiScout files exist in `/opt/piscout` — refuses to proceed if the repo was not cloned first
 
 #### Step 1 — System packages
 Installs the following via `apt-get`:
@@ -221,7 +221,7 @@ Cloud-init lockout:
 - SPI is required for the e-paper display to communicate with the Pi
 
 #### Step 4 — udev rule
-- Creates `/etc/udev/rules.d/99-raspberryfluke-eth0.rules`
+- Creates `/etc/udev/rules.d/99-piscout-eth0.rules`
 - Fires the instant the kernel detects a cable plugged in
 - Immediately sets eth0 to up and promiscuous mode before any other service reacts
 - Promiscuous mode is required to receive LLDP and CDP multicast frames
@@ -234,20 +234,20 @@ Cloud-init lockout:
 
 #### Step 6 — Waveshare e-Paper library
 - Clones the official Waveshare e-Paper repository to `/opt/waveshare-epaper`
-- Copies only the Python driver folder (`waveshare_epd/`) into `/opt/raspberryfluke/`
+- Copies only the Python driver folder (`waveshare_epd/`) into `/opt/piscout/`
 - Deletes the full Waveshare clone after copying
 
 #### Step 7 — File permissions
-- Sets ownership of all files in `/opt/raspberryfluke/` to root
+- Sets ownership of all files in `/opt/piscout/` to root
 - Makes `main.py` executable
 
 #### Step 8 — Data directory
-- Creates `/data/raspberryfluke/` for port history storage
+- Creates `/data/piscout/` for port history storage
 - This directory is used by history logging (modes 1 and 2)
 - On devices with read-only filesystem enabled, this directory is backed by a persistent image file on the boot partition
 
 #### Step 9 — Systemd service
-- Copies `raspberryfluke.service` to `/etc/systemd/system/`
+- Copies `piscout.service` to `/etc/systemd/system/`
 - Reloads systemd
 - Enables the service to start on every boot
 - Starts the service immediately
@@ -260,7 +260,7 @@ Cloud-init lockout:
 
 ## Configuration
 
-Optional settings can be adjusted in `/opt/raspberryfluke/rfconfig.py`:
+Optional settings can be adjusted in `/opt/piscout/config.py`:
 
 | Setting | Default | Description |
 |---|---|---|
@@ -270,24 +270,24 @@ Optional settings can be adjusted in `/opt/raspberryfluke/rfconfig.py`:
 | `PARTIAL_DISPLAY_DELAY` | `30.0` | Seconds to wait before displaying partial results |
 | `PORT_HISTORY_MODE` | `0` | History logging mode: 0=off, 1=port history, 2=debug log |
 | `PORT_HISTORY_LIMIT` | `50` | Maximum number of entries kept in mode 1 |
-| `PORT_HISTORY_PATH` | `"/data/raspberryfluke"` | Directory where history files are written |
+| `PORT_HISTORY_PATH` | `"/data/piscout"` | Directory where history files are written |
 | `LOG_LEVEL` | `"WARNING"` | Set to `"DEBUG"` for verbose logging during troubleshooting |
 
-After changing `rfconfig.py`, restart the service:
+After changing `config.py`, restart the service:
 
 ```bash
-sudo systemctl restart raspberryfluke.service
+sudo systemctl restart piscout.service
 ```
 
 ---
 
 ## Port History Logging
 
-RaspberryFluke can optionally record every port discovery result to disk. This is useful for technicians who need a record of which ports were tested during a job.
+PiScout can optionally record every port discovery result to disk. This is useful for technicians who need a record of which ports were tested during a job.
 
 ### Enabling history logging
 
-Edit `/opt/raspberryfluke/rfconfig.py` and set `PORT_HISTORY_MODE`:
+Edit `/opt/piscout/config.py` and set `PORT_HISTORY_MODE`:
 
 ```python
 PORT_HISTORY_MODE = 1   # Record last 50 port results
@@ -296,7 +296,7 @@ PORT_HISTORY_MODE = 1   # Record last 50 port results
 Restart the service:
 
 ```bash
-sudo systemctl restart raspberryfluke.service
+sudo systemctl restart piscout.service
 ```
 
 ### Modes
@@ -305,23 +305,23 @@ sudo systemctl restart raspberryfluke.service
 No history is recorded. No disk writes from application data. Recommended for normal use and fully compatible with the read-only filesystem.
 
 **Mode 1 — Port History**
-Records the last `PORT_HISTORY_LIMIT` port discovery results (default 50) to `/data/raspberryfluke/history.jsonl`. Each entry contains a timestamp, the discovery protocol used, and all switch data. Oldest entries are automatically dropped when the limit is reached.
+Records the last `PORT_HISTORY_LIMIT` port discovery results (default 50) to `/data/piscout/history.jsonl`. Each entry contains a timestamp, the discovery protocol used, and all switch data. Oldest entries are automatically dropped when the limit is reached.
 
 **Mode 2 — Debug Log**
-Writes verbose rotating log entries to `/data/raspberryfluke/debug.log`. The file rotates at 5MB and three backups are kept. Useful for field troubleshooting without a live SSH session.
+Writes verbose rotating log entries to `/data/piscout/debug.log`. The file rotates at 5MB and three backups are kept. Useful for field troubleshooting without a live SSH session.
 
 ### Reading the history log
 
 SSH into the device and run:
 
 ```bash
-cat /data/raspberryfluke/history.jsonl
+cat /data/piscout/history.jsonl
 ```
 
 For a formatted, readable view of each entry:
 
 ```bash
-cat /data/raspberryfluke/history.jsonl | python3 -c "
+cat /data/piscout/history.jsonl | python3 -c "
 import sys, json
 for line in sys.stdin:
     line = line.strip()
@@ -351,11 +351,11 @@ Example output:
 
 ## Read-Only Filesystem (Recommended)
 
-RaspberryFluke is designed to be unplugged from PoE at any moment without warning. On a standard read-write filesystem, a hard power cut during a disk write can corrupt the SD card over time. Enabling the read-only filesystem eliminates this risk entirely.
+PiScout is designed to be unplugged from PoE at any moment without warning. On a standard read-write filesystem, a hard power cut during a disk write can corrupt the SD card over time. Enabling the read-only filesystem eliminates this risk entirely.
 
 When read-only is enabled:
 - The root filesystem (OS and code) is mounted read-only — the SD card cannot be corrupted by a hard power cut
-- A 256MB writable image file (`/boot/firmware/rfdata.img`) is mounted at `/data` for port history storage
+- A 256MB writable image file (`/boot/firmware/psdata.img`) is mounted at `/data` for port history storage
 - All other runtime writes (logs, temp files, DHCP leases) go to RAM and are lost on power cut — this is safe and intentional
 - The device boots and operates identically from the user's perspective
 
@@ -364,7 +364,7 @@ When read-only is enabled:
 Run this **once** after `install.sh` has completed and the device is confirmed working. Use a stable power source — **not PoE** — while this script runs.
 
 ```bash
-sudo bash /opt/raspberryfluke/make_readonly.sh
+sudo bash /opt/piscout/make_readonly.sh
 ```
 
 Type `YES` when prompted. The script will configure the filesystem, create the writable data image, and reboot automatically.
@@ -389,7 +389,7 @@ mount | grep "/data"
 
 Should show:
 
-/boot/firmware/rfdata.img on /data type ext4 (rw,noatime)
+/boot/firmware/psdata.img on /data type ext4 (rw,noatime)
 
 ### Updating the device after read-only is enabled
 
@@ -397,7 +397,7 @@ To pull code updates, temporarily remount the root filesystem as writable:
 
 ```bash
 sudo remount-rw
-cd /opt/raspberryfluke
+cd /opt/piscout
 sudo git pull
 sudo remount-ro
 sudo reboot
@@ -407,7 +407,7 @@ Always reboot after remounting read-only to ensure a clean state.
 
 ### How the writable /data area works
 
-Rather than creating a new partition (which would require shrinking the root partition — a risky operation), RaspberryFluke uses a file-based approach. A 256MB ext4 image file is created at `/boot/firmware/rfdata.img`. The boot partition is always writable even when the root is read-only, so this file persists safely. Linux mounts it as a loop device at `/data` on every boot. The end result is identical to a dedicated partition from the application's perspective.
+Rather than creating a new partition (which would require shrinking the root partition — a risky operation), PiScout uses a file-based approach. A 256MB ext4 image file is created at `/boot/firmware/psdata.img`. The boot partition is always writable even when the root is read-only, so this file persists safely. Linux mounts it as a loop device at `/data` on every boot. The end result is identical to a dedicated partition from the application's perspective.
 
 ---
 
@@ -415,22 +415,22 @@ Rather than creating a new partition (which would require shrinking the root par
 
 **View live logs:**
 ```bash
-sudo journalctl -u raspberryfluke.service -f
+sudo journalctl -u piscout.service -f
 ```
 
 **View logs from the last boot:**
 ```bash
-sudo journalctl -u raspberryfluke.service -b 0 --no-pager
+sudo journalctl -u piscout.service -b 0 --no-pager
 ```
 
 **Restart the service:**
 ```bash
-sudo systemctl restart raspberryfluke.service
+sudo systemctl restart piscout.service
 ```
 
 **Check service status:**
 ```bash
-sudo systemctl status raspberryfluke.service
+sudo systemctl status piscout.service
 ```
 
 **Check boot time breakdown:**
@@ -445,7 +445,7 @@ mount | grep "on / "
 
 **Read port history:**
 ```bash
-cat /data/raspberryfluke/history.jsonl
+cat /data/piscout/history.jsonl
 ```
 
 **Temporarily make root writable for updates:**

@@ -280,24 +280,15 @@ def _extract_vlan_and_voice(tlvs: dict[int, list[bytes]]) -> tuple[str, str]:
 
     LLDP-MED Network Policy TLV content (after the 4-byte OUI+subtype prefix):
         byte 4:    Application Type (1 = Voice)
-        bytes 5-7: 3-byte big-endian policy field
-            bit 23:     Unknown Policy flag
-            bit 22:     Tagged flag
-            bits 21-20: Reserved
-            bits 19-8:  VLAN ID (12 bits)   <- NOTE: shifted 9 from bit 0
-            bits 7-5:   L2 Priority
-            bits 4-0:   DSCP value (5 bits... sometimes 6)
+        bytes 5-7: 3-byte big-endian policy field (TIA-1057 section 10.2.3)
+            Bits [23]:   U (Unknown Policy)
+            Bits [22]:   T (Tagged)
+            Bits [21]:   X (Reserved)
+            Bits [20:9]: VLAN ID (12 bits)
+            Bits [8:6]:  L2 Priority (3 bits)
+            Bits [5:0]:  DSCP value (6 bits)
 
-    Wait, let me recalculate. The 3-byte policy field is 24 bits.
-    According to TIA-1057 section 10.2.3:
-        Bits [23]:   U (Unknown Policy)
-        Bits [22]:   T (Tagged)
-        Bits [21]:   X (Reserved)
-        Bits [20:9]: VLAN ID (12 bits)
-        Bits [8:6]:  L2 Priority (3 bits)
-        Bits [5:0]:  DSCP value (6 bits)
-
-    So VLAN ID = (policy_int >> 9) & 0xFFF
+    VLAN ID = (policy_int >> 9) & 0xFFF
     """
     vlan       = ""
     voice_vlan = ""

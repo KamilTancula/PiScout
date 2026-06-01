@@ -1,10 +1,14 @@
 """
-rfconfig.py
+config.py
 
-RaspberryFluke configuration.
+PiScout configuration.
 
 Edit this file to adjust behavior. All values have safe defaults
 that work without any changes on most networks.
+
+Most settings can also be overridden via environment variables using
+the PS_ prefix (e.g. PS_NETWORK_INTERFACE=eth1). Environment variables
+take precedence over the values in this file.
 
 What this file does:
 - Define which display type to use
@@ -29,10 +33,11 @@ import os
 #   "epaper"  = Waveshare 2.13" V3 e-paper display (default)
 #   "lcd"     = Waveshare 1.44" LCD HAT display
 #
-# The environment variable RF_DISPLAY_TYPE overrides this value.
+# Override without editing this file:
+#   PS_DISPLAY_TYPE=lcd python3 main.py
 # ============================================================
 
-DISPLAY_TYPE = os.environ.get("RF_DISPLAY_TYPE", "epaper")
+DISPLAY_TYPE = os.environ.get("PS_DISPLAY_TYPE", "epaper")
 
 
 # ============================================================
@@ -40,11 +45,13 @@ DISPLAY_TYPE = os.environ.get("RF_DISPLAY_TYPE", "epaper")
 # ============================================================
 
 # Network interface to monitor.
-NETWORK_INTERFACE = "eth0"
+# Override: PS_NETWORK_INTERFACE=eth1
+NETWORK_INTERFACE = os.environ.get("PS_NETWORK_INTERFACE", "eth0")
 
 # How long to wait for any discovery method before giving up.
 # 120 seconds allows CDP's 60-second cycle to be caught up to 2 times.
-DISCOVERY_TIMEOUT = 120.0
+# Override: PS_DISCOVERY_TIMEOUT=60
+DISCOVERY_TIMEOUT = float(os.environ.get("PS_DISCOVERY_TIMEOUT", "120.0"))
 
 # How long after the "Scanning..." screen appears before port data is
 # allowed to replace it. This ensures the user sees the screen for at
@@ -74,7 +81,8 @@ RAW_RECEIVE_TIMEOUT = 2.0
 # User-defined SNMP community string.
 # If set, this is tried FIRST before the built-in list below.
 # Leave as empty string "" if you do not have a specific string.
-SNMP_USER_COMMUNITY = ""
+# Override: PS_SNMP_COMMUNITY=mystring
+SNMP_USER_COMMUNITY = os.environ.get("PS_SNMP_COMMUNITY", "")
 
 # Built-in community strings tried in order after SNMP_USER_COMMUNITY.
 # Covers the vast majority of network environments without configuration.
@@ -130,10 +138,10 @@ EPAPER_PARTIAL_REFRESH_LIMIT = 8
 # --------------------- LCD SETTINGS -------------------------
 # ============================================================
 
-LCD_ROTATE_180          = True
-LCD_CLEAR_ON_START      = True
-LCD_BACKGROUND_COLOR    = (0, 0, 0)
-LCD_TEXT_COLOR          = (255, 255, 255)
+LCD_ROTATE_180           = True
+LCD_CLEAR_ON_START       = True
+LCD_BACKGROUND_COLOR     = (0, 0, 0)
+LCD_TEXT_COLOR           = (255, 255, 255)
 LCD_BACKLIGHT_BRIGHTNESS = 100
 
 
@@ -144,10 +152,10 @@ LCD_BACKLIGHT_BRIGHTNESS = 100
 # "DEBUG"   for troubleshooting.
 #
 # Override without editing this file:
-#   RF_LOG_LEVEL=DEBUG python3 main.py
+#   PS_LOG_LEVEL=DEBUG python3 main.py
 # ============================================================
 
-LOG_LEVEL = os.environ.get("RF_LOG_LEVEL", "WARNING")
+LOG_LEVEL = os.environ.get("PS_LOG_LEVEL", "WARNING")
 
 
 # ============================================================
@@ -169,11 +177,10 @@ LOG_LEVEL = os.environ.get("RF_LOG_LEVEL", "WARNING")
 #   - Each history entry is ~180 bytes. 50 entries = ~9KB total.
 #   - The debug log rotates at 5MB and keeps 3 backup files.
 #
-# Read history log via SSH:
-#   cat /data/raspberryfluke/history.jsonl
-#   python3 -m json.tool /data/raspberryfluke/history.jsonl
+# Override: PS_HISTORY_MODE=1
+# Override: PS_HISTORY_PATH=/data/piscout
 # ============================================================
 
-PORT_HISTORY_MODE  = 0
-PORT_HISTORY_LIMIT = 50
-PORT_HISTORY_PATH  = "/data/raspberryfluke"
+PORT_HISTORY_MODE  = int(os.environ.get("PS_HISTORY_MODE",  "0"))
+PORT_HISTORY_LIMIT = int(os.environ.get("PS_HISTORY_LIMIT", "50"))
+PORT_HISTORY_PATH  = os.environ.get("PS_HISTORY_PATH", "/data/piscout")

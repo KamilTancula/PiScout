@@ -2,7 +2,7 @@
 # ============================================================
 # make_readonly.sh
 #
-# One-time script to make the RaspberryFluke SD card read-only
+# One-time script to make the PiScout SD card read-only
 # and create a writable /data area for port history logging.
 #
 # Run this ONCE after install.sh has completed successfully and
@@ -10,17 +10,17 @@
 # (not PoE) when running this script.
 #
 # How /data works (no partition resizing needed):
-#   A 256MB ext4 image file is created at /boot/firmware/rfdata.img
+#   A 256MB ext4 image file is created at /boot/firmware/psdata.img
 #   This file is mounted as a loop device at /data on every boot.
 #   The /boot/firmware partition (vfat) has plenty of free space and
 #   remains writable even when the root filesystem is read-only.
 #   This avoids any need to resize or repartition the SD card.
 #
 # What this script does:
-#   1. Creates /boot/firmware/rfdata.img (256MB ext4 image)
+#   1. Creates /boot/firmware/psdata.img (256MB ext4 image)
 #   2. Updates /etc/fstab to:
 #        - Mount root (/) read-only
-#        - Mount rfdata.img as /data via loop device
+#        - Mount psdata.img as /data via loop device
 #        - Redirect /tmp, /var/log, /var/tmp to tmpfs (RAM)
 #   3. Adds 'ro' to /boot/firmware/cmdline.txt
 #   4. Installs remount-rw and remount-ro helper scripts
@@ -33,7 +33,7 @@
 #
 # To update device code after read-only is enabled:
 #   sudo remount-rw
-#   cd /opt/raspberryfluke && sudo git pull
+#   cd /opt/piscout && sudo git pull
 #   sudo remount-ro
 #   sudo reboot
 # ============================================================
@@ -52,14 +52,14 @@ die()   { error "$*"; exit 1; }
 
 # ---- Configuration ----------------------------------------
 BOOT_DIR="/boot/firmware"
-DATA_IMG="${BOOT_DIR}/rfdata.img"
+DATA_IMG="${BOOT_DIR}/psdata.img"
 DATA_MOUNT="/data"
 DATA_SIZE_MB=256
 ROOT_PART="/dev/mmcblk0p2"
 # -----------------------------------------------------------
 
 # ---- 1. Validation ----------------------------------------
-info "Starting RaspberryFluke read-only filesystem setup..."
+info "Starting PiScout read-only filesystem setup..."
 
 if [[ $EUID -ne 0 ]]; then
     die "This script must be run as root. Use: sudo bash make_readonly.sh"
@@ -81,7 +81,7 @@ info "Boot partition has ${BOOT_FREE_MB}MB free — sufficient for ${DATA_SIZE_M
 # Confirm the user knows what they're doing.
 echo ""
 warn "This script will make the root filesystem READ-ONLY."
-warn "Run this only on a fully working RaspberryFluke installation."
+warn "Run this only on a fully working PiScout installation."
 warn "Use a stable power source — NOT PoE — while this script runs."
 echo ""
 read -r -p "Type YES to continue: " confirm
@@ -95,7 +95,7 @@ if [[ -f "$DATA_IMG" ]]; then
 else
     info "Creating ${DATA_SIZE_MB}MB ext4 data image at $DATA_IMG..."
     dd if=/dev/zero of="$DATA_IMG" bs=1M count="$DATA_SIZE_MB" status=progress
-    mkfs.ext4 -L "rfdata" -F "$DATA_IMG"
+    mkfs.ext4 -L "psdata" -F "$DATA_IMG"
     info "Data image created and formatted."
 fi
 
@@ -103,11 +103,11 @@ fi
 info "Mounting data image to verify and populate..."
 mkdir -p "$DATA_MOUNT"
 mount -o loop "$DATA_IMG" "$DATA_MOUNT"
-mkdir -p "$DATA_MOUNT/raspberryfluke"
-chmod 755 "$DATA_MOUNT/raspberryfluke"
+mkdir -p "$DATA_MOUNT/piscout"
+chmod 755 "$DATA_MOUNT/piscout"
 
 # Copy any existing history data if present.
-if [[ -d /data/raspberryfluke ]] && mountpoint -q "$DATA_MOUNT"; then
+if [[ -d /data/piscout ]] && mountpoint -q "$DATA_MOUNT"; then
     # We just mounted fresh — copy from original /data if it had content.
     true
 fi
@@ -133,7 +133,7 @@ BOOT_ENTRY=$(grep "/boot/firmware" /etc/fstab.bak || echo "")
 cat > /etc/fstab << EOF
 proc            /proc           proc    defaults          0       0
 
-# Boot partition — always writable (hosts rfdata.img)
+# Boot partition — always writable (hosts psdata.img)
 $BOOT_ENTRY
 
 # Root filesystem — READ ONLY
@@ -142,7 +142,7 @@ PARTUUID=$ROOT_PARTUUID  /  ext4  ro,noatime  0  1
 
 # Writable data image mounted as loop device.
 # Stores port history and debug logs persistently.
-$BOOT_DIR/rfdata.img  /data  ext4  loop,rw,noatime  0  2
+$BOOT_DIR/psdata.img  /data  ext4  loop,rw,noatime  0  2
 
 # RAM-based temporary filesystems.
 # All runtime writes go here. Lost on power cut — safe by design.
@@ -219,17 +219,17 @@ info "The device will reboot in 5 seconds."
 info ""
 info "After reboot:"
 info "  - Root filesystem is READ ONLY (SD card protected)"
-info "  - /data is WRITABLE (port history stored at /data/raspberryfluke)"
+info "  - /data is WRITABLE (port history stored at /data/piscout)"
 info "  - /tmp and /var/log are in RAM"
 echo ""
 info "To update device code in future:"
 info "  sudo remount-rw"
-info "  cd /opt/raspberryfluke && sudo git pull"
+info "  cd /opt/piscout && sudo git pull"
 info "  sudo remount-ro"
 info "  sudo reboot"
 echo ""
 info "To read port history:"
-info "  cat /data/raspberryfluke/history.jsonl"
+info "  cat /data/piscout/history.jsonl"
 echo ""
 
 sleep 5

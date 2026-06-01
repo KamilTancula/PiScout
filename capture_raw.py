@@ -26,6 +26,7 @@ import logging
 import select
 import socket
 import struct
+import time
 
 
 log = logging.getLogger(__name__)
@@ -173,16 +174,21 @@ class RawCapture:
             log.error("receive_frame called but raw socket is not open")
             return None, None
 
-        deadline = timeout
+        deadline = time.monotonic() + timeout
 
-        while deadline > 0:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, None
+
             try:
-                ready, _, _ = select.select([self._sock], [], [], min(deadline, 2.0))
+                ready, _, _ = select.select([self._sock], [], [], min(remaining, 2.0))
             except Exception as exc:
                 log.debug("select() error on %s: %s", self.interface, exc)
                 return None, None
 
             if not ready:
+                # select timed out — return so caller can check cancel/carrier.
                 return None, None
 
             try:
@@ -207,10 +213,7 @@ class RawCapture:
                 )
                 return "cdp", frame
 
-            # Non-matching frame (e.g. ARP, STP). Discard and keep waiting.
-            deadline -= 0.001
-
-        return None, None
+            # Non-matching frame (e.g. ARP, STP) — discard and check remaining time.
 
     def __enter__(self) -> "RawCapture":
         self.open()

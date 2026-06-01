@@ -27,6 +27,8 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from waveshare_epd import epd2in13_V3
 
+from parse_utils import normalize_display_lines
+
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ class EPaperDisplay:
     LINE_SPACING   = 2
 
     # Fixed header drawn at the top of every screen.
-    TITLE_TEXT       = "RaspberryFluke"
+    TITLE_TEXT       = "PiScout"
     TITLE_FONT_SIZE  = 16
     TITLE_UNDERLINE_GAP = 1
     TITLE_BODY_GAP      = 2
@@ -119,7 +121,8 @@ class EPaperDisplay:
         self._partial_base_ready = False
 
         # Save the last 5 normalized body lines shown on screen.
-        self.last_lines = None
+        self.last_lines      = None
+        self._last_protocol  = ""
 
         # Save the last refresh time.
         self.last_refresh_time = 0.0
@@ -234,7 +237,7 @@ class EPaperDisplay:
         """
         Show 5 body lines on the e-paper display.
 
-        The fixed "RaspberryFluke" header and underline are always drawn
+        The fixed "PiScout" header and underline are always drawn
         by this method. The caller does not need to include a header in lines.
 
         lines:
@@ -250,11 +253,11 @@ class EPaperDisplay:
             False if the update was skipped.
         """
         with self.lock:
-            normalized_lines = self._normalize_lines(lines)
+            normalized_lines = normalize_display_lines(lines)
             protocol_label   = str(protocol).upper().strip()[:4] if protocol else ""
 
             # Skip if body text and protocol are identical to what is on screen.
-            if not force and normalized_lines == self.last_lines and protocol_label == getattr(self, "_last_protocol", ""):
+            if not force and normalized_lines == self.last_lines and protocol_label == self._last_protocol:
                 return False
 
             # VLAN or VOICE changes always trigger an immediate refresh,
@@ -382,31 +385,11 @@ class EPaperDisplay:
         except OSError:
             return ImageFont.load_default()
 
-    def _normalize_lines(self, lines, max_lines=5):
-        """
-        Clean up body lines before rendering or comparing.
-
-        What this does:
-        - Keep only the first 5 lines
-        - Turn None into blank text
-        - Collapse extra whitespace
-        - Pad with blank lines if fewer than 5 were provided
-        """
-        cleaned = []
-        for line in list(lines)[:max_lines]:
-            if line is None:
-                cleaned.append("")
-            else:
-                cleaned.append(" ".join(str(line).strip().split()))
-        while len(cleaned) < max_lines:
-            cleaned.append("")
-        return cleaned
-
     def _render_image(self, body_lines, protocol=""):
         """
         Turn the 5 normalized body lines into a display image.
 
-        Always draws the fixed "RaspberryFluke" header with an underline,
+        Always draws the fixed "PiScout" header with an underline,
         then renders each body line below it.
 
         If protocol is provided ("SNMP", "LLDP", or "CDP"), it is drawn

@@ -144,11 +144,11 @@ def run(
 
     # ---- Step 3: Send triggers NOW that the socket is listening ----
     log.debug("Race: socket ready — sending triggers on %s", interface)
-    trigger.send_all_triggers(interface)
+    trigger.send_all_triggers(interface, local_mac)
 
     # ---- Step 4: Start persistent CDP burst thread ----
     # Sends CDP frames every 100ms throughout the entire discovery window.
-    burst_thread = trigger.start_persistent_cdp_burst(interface, internal_stop)
+    burst_thread = trigger.start_persistent_cdp_burst(interface, internal_stop, src_mac=local_mac)
 
     # ---- Step 5: Start SNMP thread ----
     snmp_thread = threading.Thread(

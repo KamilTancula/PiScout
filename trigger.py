@@ -35,8 +35,8 @@ import logging
 import socket
 import struct
 import threading
-import time
 from pathlib import Path
+from typing import Optional
 
 
 log = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ _CDP_CAPABILITY_HOST  = 0x00000010
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def get_interface_mac(interface: str) -> bytes | None:
+def get_interface_mac(interface: str) -> Optional[bytes]:
     """
     Read the MAC address of the interface from the kernel sysfs.
 
@@ -199,7 +199,7 @@ def _build_lldp_frame(src_mac: bytes, interface: str) -> bytes:
     return eth_header + lldp_pdu
 
 
-def send_lldp_trigger(interface: str) -> bool:
+def send_lldp_trigger(interface: str, src_mac: Optional[bytes] = None) -> bool:
     """
     Send one LLDP fast-start frame on the given interface.
 
@@ -209,10 +209,12 @@ def send_lldp_trigger(interface: str) -> bool:
 
     Parameters:
         interface : interface name such as "eth0"
+        src_mac   : 6-byte MAC address; read from sysfs if not provided
 
     Returns True if sent, False on failure.
     """
-    src_mac = get_interface_mac(interface)
+    if src_mac is None:
+        src_mac = get_interface_mac(interface)
 
     if src_mac is None:
         log.warning(
@@ -300,16 +302,16 @@ def _build_cdp_frame(src_mac: bytes, interface: str) -> bytes:
                                 Capabilities, Software Version, Platform
 
     Sending a fuller CDP advertisement (rather than the bare minimum of
-    Device ID and Port ID) causes Cisco IOS to treat RaspberryFluke as a
+    Device ID and Port ID) causes Cisco IOS to treat PiScout as a
     proper CDP neighbor, which improves the likelihood of an immediate
     response on platforms like the Catalyst 6500.
 
     The 802.3 length field covers everything from the LLC header onward.
     The CDP checksum covers the CDP header and TLVs only.
     """
-    device_id    = b"RaspberryFluke"
+    device_id    = b"PiScout"
     port_id      = interface.encode("ascii")
-    sw_version   = b"RaspberryFluke Network Discovery Tool"
+    sw_version   = b"PiScout Network Discovery Tool"
     platform     = b"Raspberry Pi Zero 2W"
     capabilities = struct.pack("!I", _CDP_CAPABILITY_HOST)
 
@@ -343,17 +345,25 @@ def _build_cdp_frame(src_mac: bytes, interface: str) -> bytes:
     return eth_header + payload
 
 
-def send_cdp_trigger(interface: str) -> bool:
+def send_cdp_trigger(interface: str, src_mac: Optional[bytes] = None) -> bool:
     """
     Send a single CDP trigger frame on the given interface.
 
     Used for the initial frame sent before the persistent burst loop starts.
+
+    Parameters:
+        interface : interface name such as "eth0"
+        src_mac   : 6-byte MAC address; read from sysfs if not provided
+
     Returns True if sent, False if MAC lookup failed.
     """
-    src_mac = get_interface_mac(interface)
+    if src_mac is None:
+        src_mac = get_interface_mac(interface)
+
     if src_mac is None:
         log.warning("CDP trigger skipped: could not read MAC for %s", interface)
         return False
+
     frame = _build_cdp_frame(src_mac, interface)
     return _send_raw_frame(interface, frame, "CDP")
 
@@ -361,6 +371,7 @@ def send_cdp_trigger(interface: str) -> bool:
 def start_persistent_cdp_burst(
     interface:    str,
     cancel_event: threading.Event,
+    src_mac:      Optional[bytes] = None,
     interval:     float = 0.1,
 ) -> threading.Thread:
     """
@@ -372,18 +383,22 @@ def start_persistent_cdp_burst(
     of catching the switch's CDP polling cycle on platforms that do not
     support immediate CDP response (such as the Catalyst 6500 Sup2T).
 
+    A single raw socket is opened once for the duration of the burst
+    rather than creating a new socket per frame.
+
     Parameters:
         interface    : Ethernet interface name, e.g. "eth0"
         cancel_event : set this to stop the burst thread
+        src_mac      : 6-byte MAC address; read from sysfs if not provided
         interval     : seconds between frames (default 100ms)
 
     Returns the running Thread so the caller can join it on cleanup.
     """
-    src_mac = get_interface_mac(interface)
+    if src_mac is None:
+        src_mac = get_interface_mac(interface)
 
     if src_mac is None:
         log.warning("Persistent CDP burst: could not read MAC for %s", interface)
-        # Return an already-finished dummy thread.
         t = threading.Thread(target=lambda: None, daemon=True)
         t.start()
         return t
@@ -392,11 +407,31 @@ def start_persistent_cdp_burst(
     counter = [0]
 
     def _burst_loop() -> None:
-        while not cancel_event.is_set():
-            counter[0] += 1
-            _send_raw_frame(interface, frame, f"CDP persistent #{counter[0]}")
-            # Use event wait so the thread wakes immediately on cancel.
-            cancel_event.wait(timeout=interval)
+        try:
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+            sock.bind((interface, 0))
+        except (PermissionError, OSError) as exc:
+            log.error("CDP burst: could not open socket on %s: %s", interface, exc)
+            return
+
+        try:
+            while not cancel_event.is_set():
+                counter[0] += 1
+                try:
+                    sock.send(frame)
+                    log.debug(
+                        "CDP persistent #%d sent on %s (%d bytes)",
+                        counter[0], interface, len(frame),
+                    )
+                except OSError as exc:
+                    log.debug("CDP burst send error on %s: %s", interface, exc)
+                    break
+                cancel_event.wait(timeout=interval)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
     t = threading.Thread(target=_burst_loop, name="rf-cdp-burst", daemon=True)
     t.start()
@@ -412,7 +447,7 @@ def start_persistent_cdp_burst(
 # Combined trigger — call this from race.py
 # ---------------------------------------------------------------------------
 
-def send_all_triggers(interface: str) -> None:
+def send_all_triggers(interface: str, src_mac: Optional[bytes] = None) -> None:
     """
     Send one LLDP frame and one initial CDP frame on the given interface.
 
@@ -420,7 +455,11 @@ def send_all_triggers(interface: str) -> None:
     are missed. The persistent CDP burst is started separately via
     start_persistent_cdp_burst() so it continues throughout the window.
 
+    Parameters:
+        interface : interface name such as "eth0"
+        src_mac   : 6-byte MAC address; read from sysfs if not provided
+
     Failures are logged but do not raise exceptions.
     """
-    send_lldp_trigger(interface)
-    send_cdp_trigger(interface)
+    send_lldp_trigger(interface, src_mac)
+    send_cdp_trigger(interface, src_mac)

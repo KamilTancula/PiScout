@@ -36,7 +36,7 @@ import capture_raw
 import parse_cdp_raw
 import parse_lldp_raw
 import parse_utils
-import rfconfig
+import config
 
 
 log = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ _COMPLETE_FIELDS = ("switch_name", "port")
 
 def _get_receive_timeout() -> float:
     try:
-        return max(0.5, float(getattr(rfconfig, "RAW_RECEIVE_TIMEOUT", 2.0)))
+        return max(0.5, float(getattr(config, "RAW_RECEIVE_TIMEOUT", 2.0)))
     except (TypeError, ValueError):
         return 2.0
 

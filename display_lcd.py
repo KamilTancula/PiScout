@@ -24,7 +24,7 @@ import threading
 from PIL import Image, ImageDraw, ImageFont
 from waveshare_lcd import LCD_1in44
 
-from parse_utils import shorten_interface_name
+from parse_utils import normalize_display_lines, shorten_interface_name
 
 
 # Index of the PORT line within the 5 body lines passed to show_lines.
@@ -200,7 +200,7 @@ class LCDDisplay:
         with self.lock:
             self._ensure_initialized()
 
-            normalized_lines = self._normalize_lines(lines)
+            normalized_lines = normalize_display_lines(lines)
             prepared_lines   = self._prepare_lines_for_lcd(normalized_lines)
 
             if not force and prepared_lines == self.last_lines:
@@ -331,25 +331,6 @@ class LCDDisplay:
         """
         self._ensure_initialized()
         self.lcd.LCD_ShowImage(image, 0, 0)
-
-    def _normalize_lines(self, lines, max_lines=5):
-        """
-        Clean up the lines before drawing them.
-
-        - Keep only the first 5 lines
-        - Turn None into blank text
-        - Collapse extra whitespace
-        - Pad with blank lines if fewer than 5 were provided
-        """
-        cleaned = []
-        for line in list(lines)[:max_lines]:
-            if line is None:
-                cleaned.append("")
-            else:
-                cleaned.append(" ".join(str(line).strip().split()))
-        while len(cleaned) < max_lines:
-            cleaned.append("")
-        return cleaned
 
     def _prepare_lines_for_lcd(self, lines):
         """

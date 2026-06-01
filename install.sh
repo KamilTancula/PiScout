@@ -2,13 +2,13 @@
 # ============================================================
 # install.sh
 #
-# Automated installer for RaspberryFluke.
+# Automated installer for PiScout.
 #
 # Usage:
 #   Clone the repository first, then run this script:
 #
-#   sudo git clone https://github.com/MKWB/RaspberryFluke.git /opt/raspberryfluke
-#   cd /opt/raspberryfluke
+#   sudo git clone https://github.com/MKWB/PiScout.git /opt/piscout
+#   cd /opt/piscout
 #   sudo bash install.sh
 #
 # The script is idempotent — safe to run again after updates.
@@ -30,12 +30,12 @@
 set -euo pipefail
 
 # ---- Configuration ----------------------------------------
-INSTALL_DIR="/opt/raspberryfluke"
+INSTALL_DIR="/opt/piscout"
 WAVESHARE_REPO="https://github.com/waveshare/e-Paper.git"
 WAVESHARE_CLONE_DIR="/opt/waveshare-epaper"
 WAVESHARE_LIB_SRC="$WAVESHARE_CLONE_DIR/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
 WAVESHARE_LIB_DST="$INSTALL_DIR/waveshare_epd"
-SERVICE_NAME="raspberryfluke"
+SERVICE_NAME="piscout"
 # -----------------------------------------------------------
 
 RED="\033[0;31m"
@@ -56,12 +56,12 @@ fi
 
 # ---- Confirm install directory ----------------------------
 if [[ ! -f "$INSTALL_DIR/main.py" ]]; then
-    die "RaspberryFluke files not found in $INSTALL_DIR.
+    die "PiScout files not found in $INSTALL_DIR.
 Clone the repository first:
-  sudo git clone https://github.com/MKWB/RaspberryFluke.git $INSTALL_DIR"
+  sudo git clone https://github.com/MKWB/PiScout.git $INSTALL_DIR"
 fi
 
-info "Starting RaspberryFluke installation from $INSTALL_DIR"
+info "Starting PiScout installation from $INSTALL_DIR"
 
 # ---- 2. System packages -----------------------------------
 info "Installing system packages..."
@@ -110,7 +110,7 @@ if [[ -n "$BOOT_CONFIG" ]]; then
     systemctl mask    bluetooth 2>/dev/null || true
 
     # -- Disable WiFi --
-    # RaspberryFluke uses the wired Ethernet port exclusively.
+    # PiScout uses the wired Ethernet port exclusively.
     # Disabling WiFi saves ~2-3 seconds of boot time.
     if ! grep -q "dtoverlay=disable-wifi" "$BOOT_CONFIG" 2>/dev/null; then
         echo "dtoverlay=disable-wifi" >> "$BOOT_CONFIG"
@@ -151,7 +151,7 @@ fi
 # -- Silent boot: suppress kernel messages on console --
 # Redirects boot output to tty3 (unused) and sets loglevel=0 to silence
 # kernel messages. Saves 1-2 seconds of visible boot spam and makes the
-# transition from boot to the RaspberryFluke display cleaner.
+# transition from boot to the PiScout display cleaner.
 CMDLINE_FILE=""
 if [[ -f /boot/firmware/cmdline.txt ]]; then
     CMDLINE_FILE="/boot/firmware/cmdline.txt"
@@ -268,10 +268,10 @@ fi
 # ---- 6. udev rule for instant eth0 activation --------------------
 info "Installing udev rule for eth0 fast activation..."
 
-UDEV_RULE_FILE="/etc/udev/rules.d/99-raspberryfluke-eth0.rules"
+UDEV_RULE_FILE="/etc/udev/rules.d/99-piscout-eth0.rules"
 
 cat > "$UDEV_RULE_FILE" << 'EOF'
-# RaspberryFluke: Bring eth0 up in promiscuous mode the instant the kernel
+# PiScout: Bring eth0 up in promiscuous mode the instant the kernel
 # detects a carrier signal. This fires before dhcpcd gets a chance to act,
 # ensuring the raw capture socket can be opened immediately on link-up.
 # Promiscuous mode is required to receive LLDP and CDP multicast frames.
@@ -293,11 +293,11 @@ mkdir -p /var/log/journal
 
 # Enable persistent storage and reduce sync interval so logs survive
 # hard power cuts (which happen every time PoE is unplugged).
-JOURNAL_CONF="/etc/systemd/journald.conf.d/raspberryfluke.conf"
+JOURNAL_CONF="/etc/systemd/journald.conf.d/piscout.conf"
 mkdir -p "$(dirname "$JOURNAL_CONF")"
 
 cat > "$JOURNAL_CONF" << 'EOF'
-# RaspberryFluke journal configuration.
+# PiScout journal configuration.
 # Persistent storage ensures logs survive hard power cuts from PoE.
 # SyncIntervalSec=10s means at most 10 seconds of logs are lost on power cut.
 [Journal]
@@ -348,17 +348,17 @@ info "Permissions set."
 # ---- 10. Data directory -----------------------------------
 info "Creating writable data directory..."
 
-# Create /data/raspberryfluke even if the writable partition is not yet
+# Create /data/piscout even if the writable partition is not yet
 # set up. This allows history logging to work in non-read-only setups
 # (e.g. during testing) and gives make_readonly.sh a target to work with.
-mkdir -p /data/raspberryfluke
-chmod 755 /data/raspberryfluke
-info "Data directory ready at /data/raspberryfluke."
+mkdir -p /data/piscout
+chmod 755 /data/piscout
+info "Data directory ready at /data/piscout."
 
 # ---- 11. Systemd service -----------------------------------
 info "Installing systemd service..."
 
-SERVICE_SRC="$INSTALL_DIR/raspberryfluke.service"
+SERVICE_SRC="$INSTALL_DIR/piscout.service"
 SERVICE_DST="/etc/systemd/system/${SERVICE_NAME}.service"
 
 if [[ ! -f "$SERVICE_SRC" ]]; then
@@ -376,7 +376,7 @@ info "Service installed and started."
 # ---- Done -------------------------------------------------
 echo ""
 info "================================================"
-info "  RaspberryFluke installation complete."
+info "  PiScout installation complete."
 info "================================================"
 echo ""
 info "Check service status:"

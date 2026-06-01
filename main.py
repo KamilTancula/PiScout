@@ -1,7 +1,7 @@
 """
 main.py
 
-RaspberryFluke — entry point and main loop.
+PiScout — entry point and main loop.
 
 Monitors Ethernet carrier state, runs the discovery race on link-up,
 and updates the e-paper display with switch port information.
@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import rfconfig
+import config
 import race
 import trigger
 import discover_passive
@@ -41,7 +41,7 @@ import history
 
 # Configure logging before importing display or discovery modules
 # so their loggers inherit the correct level.
-_log_level_str = (getattr(rfconfig, "LOG_LEVEL", "WARNING") or "WARNING").upper()
+_log_level_str = (getattr(config, "LOG_LEVEL", "WARNING") or "WARNING").upper()
 _log_level     = getattr(logging, _log_level_str, logging.WARNING)
 
 logging.basicConfig(
@@ -59,35 +59,35 @@ log.info("Logging initialized at level %s", _log_level_str)
 # ============================================================
 
 def _get_display_type() -> str:
-    return str(getattr(rfconfig, "DISPLAY_TYPE", "epaper")).lower().strip()
+    return str(getattr(config, "DISPLAY_TYPE", "epaper")).lower().strip()
 
 
 def _create_display():
     """
-    Instantiate the correct display driver based on rfconfig.DISPLAY_TYPE.
+    Instantiate the correct display driver based on config.DISPLAY_TYPE.
     """
     display_type = _get_display_type()
-    font_path    = getattr(rfconfig, "DISPLAY_FONT_PATH", None)
+    font_path    = getattr(config, "DISPLAY_FONT_PATH", None)
 
     if display_type == "epaper":
         from display_epaper import EPaperDisplay
         return EPaperDisplay(
             font_path=font_path,
-            min_refresh_interval=int(getattr(rfconfig, "EPAPER_MIN_REFRESH_INTERVAL", 10)),
-            auto_sleep=bool(getattr(rfconfig, "EPAPER_AUTO_SLEEP", True)),
+            min_refresh_interval=int(getattr(config, "EPAPER_MIN_REFRESH_INTERVAL", 10)),
+            auto_sleep=bool(getattr(config, "EPAPER_AUTO_SLEEP", True)),
             startup_mode=True,
-            partial_refresh_limit=int(getattr(rfconfig, "EPAPER_PARTIAL_REFRESH_LIMIT", 8)),
+            partial_refresh_limit=int(getattr(config, "EPAPER_PARTIAL_REFRESH_LIMIT", 8)),
         )
 
     if display_type == "lcd":
         from display_lcd import LCDDisplay
         return LCDDisplay(
             font_path=font_path,
-            rotate_180=bool(getattr(rfconfig, "LCD_ROTATE_180", True)),
-            clear_on_start=bool(getattr(rfconfig, "LCD_CLEAR_ON_START", True)),
-            background_color=getattr(rfconfig, "LCD_BACKGROUND_COLOR", (0, 0, 0)),
-            text_color=getattr(rfconfig, "LCD_TEXT_COLOR", (255, 255, 255)),
-            backlight_brightness=int(getattr(rfconfig, "LCD_BACKLIGHT_BRIGHTNESS", 100)),
+            rotate_180=bool(getattr(config, "LCD_ROTATE_180", True)),
+            clear_on_start=bool(getattr(config, "LCD_CLEAR_ON_START", True)),
+            background_color=getattr(config, "LCD_BACKGROUND_COLOR", (0, 0, 0)),
+            text_color=getattr(config, "LCD_TEXT_COLOR", (255, 255, 255)),
+            backlight_brightness=int(getattr(config, "LCD_BACKLIGHT_BRIGHTNESS", 100)),
         )
 
     log.warning(
@@ -229,12 +229,12 @@ def run() -> None:
     signal.signal(signal.SIGINT,  _sigterm_handler)
 
     # --- Configuration ---
-    interface            = str(getattr(rfconfig, "NETWORK_INTERFACE",     "eth0"))
-    disc_timeout         = float(getattr(rfconfig, "DISCOVERY_TIMEOUT",   120.0))
-    reveal_delay         = float(getattr(rfconfig, "RESULT_REVEAL_DELAY",   1.5))
-    partial_display_delay = float(getattr(rfconfig, "PARTIAL_DISPLAY_DELAY", 30.0))
+    interface            = str(getattr(config, "NETWORK_INTERFACE",     "eth0"))
+    disc_timeout         = float(getattr(config, "DISCOVERY_TIMEOUT",   120.0))
+    reveal_delay         = float(getattr(config, "RESULT_REVEAL_DELAY",   1.5))
+    partial_display_delay = float(getattr(config, "PARTIAL_DISPLAY_DELAY", 30.0))
 
-    log.info("Starting RaspberryFluke")
+    log.info("Starting PiScout")
     log.info("DISPLAY_TYPE=%s",           _get_display_type())
     log.info("NETWORK_INTERFACE=%s",      interface)
     log.info("DISCOVERY_TIMEOUT=%s",      disc_timeout)
@@ -244,7 +244,7 @@ def run() -> None:
     # --- Verify interface exists ---
     if not _interface_exists(interface):
         log.error(
-            "Network interface '%s' not found. Check NETWORK_INTERFACE in rfconfig.py.",
+            "Network interface '%s' not found. Check NETWORK_INTERFACE in config.py.",
             interface,
         )
         sys.exit(1)
@@ -297,7 +297,7 @@ def run() -> None:
         # display starts drawing "Scanning...". The e-paper takes ~400ms
         # for a partial refresh — every millisecond of head start matters
         # on LLDP switches that respond almost immediately.
-        trigger.send_lldp_trigger(interface)
+        trigger.send_lldp_trigger(interface, local_mac)
         log.debug("Early LLDP trigger sent on %s before display draw", interface)
 
         # Show "Scanning..." and note when it finishes drawing.
@@ -449,6 +449,8 @@ def run() -> None:
                         force=True,
                         protocol=fresh.get("protocol", ""),
                     )
+                    if is_upgrade:
+                        history.record(fresh)
                     log.info(
                         "Display %s | protocol=%s switch=%s port=%s vlan=%s voice=%s",
                         "upgraded from partial" if is_upgrade else "refreshed",
@@ -527,7 +529,7 @@ def run() -> None:
         refresh_cancel.set()
 
     # ---- Graceful shutdown ----
-    log.info("Shutting down RaspberryFluke")
+    log.info("Shutting down PiScout")
     try:
         display.shutdown()
     except Exception as exc:

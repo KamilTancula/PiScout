@@ -1,7 +1,7 @@
 """
 parse_utils.py
 
-Shared helper functions used by the RaspberryFluke parser modules.
+Shared helper functions used by the PiScout parser modules.
 
 What this file does:
 - Strip domain suffixes from hostnames
@@ -19,6 +19,26 @@ What this file does NOT do:
 from __future__ import annotations
 
 import re
+
+
+def normalize_display_lines(lines, max_lines: int = 5) -> list:
+    """
+    Normalize a list of display lines to exactly max_lines clean strings.
+
+    - Trims to max_lines entries
+    - Converts None to ""
+    - Collapses interior whitespace
+    - Pads with "" if fewer than max_lines were provided
+    """
+    cleaned = []
+    for line in list(lines)[:max_lines]:
+        if line is None:
+            cleaned.append("")
+        else:
+            cleaned.append(" ".join(str(line).strip().split()))
+    while len(cleaned) < max_lines:
+        cleaned.append("")
+    return cleaned
 
 
 def sanitize_display_string(text: str) -> str:

@@ -1,9 +1,9 @@
 """
 history.py
 
-Port discovery history logging for RaspberryFluke.
+Port discovery history logging for PiScout.
 
-Three modes controlled by PORT_HISTORY_MODE in rfconfig.py:
+Three modes controlled by PORT_HISTORY_MODE in config.py:
 
   Mode 0 — Off (default)
     No history is recorded. Zero disk activity. Fully compatible with
@@ -23,7 +23,7 @@ Three modes controlled by PORT_HISTORY_MODE in rfconfig.py:
     Useful for field troubleshooting without a live SSH session.
 
 What this file does:
-  - Read PORT_HISTORY_MODE, PORT_HISTORY_LIMIT, PORT_HISTORY_PATH from rfconfig
+  - Read PORT_HISTORY_MODE, PORT_HISTORY_LIMIT, PORT_HISTORY_PATH from config
   - Provide a single record(result) function that main.py calls
   - Handle all file I/O, rotation, and atomic writes internally
   - Fail silently so a history write error never affects discovery or display
@@ -45,7 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import rfconfig
+import config
 
 
 log = logging.getLogger(__name__)
@@ -57,20 +57,20 @@ log = logging.getLogger(__name__)
 
 def _get_mode() -> int:
     try:
-        return max(0, min(2, int(getattr(rfconfig, "PORT_HISTORY_MODE", 0))))
+        return max(0, min(2, int(getattr(config, "PORT_HISTORY_MODE", 0))))
     except (TypeError, ValueError):
         return 0
 
 
 def _get_limit() -> int:
     try:
-        return max(1, int(getattr(rfconfig, "PORT_HISTORY_LIMIT", 50)))
+        return max(1, int(getattr(config, "PORT_HISTORY_LIMIT", 50)))
     except (TypeError, ValueError):
         return 50
 
 
 def _get_path() -> Path:
-    raw = str(getattr(rfconfig, "PORT_HISTORY_PATH", "/data/raspberryfluke")).strip()
+    raw = str(getattr(config, "PORT_HISTORY_PATH", "/data/piscout")).strip()
     return Path(raw)
 
 
@@ -221,7 +221,7 @@ def _get_debug_logger(history_dir: Path) -> Optional[logging.Logger]:
 
         # Create a dedicated logger that does not propagate to the root logger
         # so debug entries go to file only, not to the systemd journal.
-        debug_log_logger = logging.getLogger("raspberryfluke.debug_file")
+        debug_log_logger = logging.getLogger("piscout.debug_file")
         debug_log_logger.propagate = False
         debug_log_logger.setLevel(logging.DEBUG)
         debug_log_logger.addHandler(handler)

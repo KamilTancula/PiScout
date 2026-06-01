@@ -1,4 +1,4 @@
-# RaspberryFluke Dependencies
+# PiScout Dependencies
 # ============================================================
 #
 # Most dependencies are installed via apt on Raspberry Pi OS.
@@ -20,7 +20,7 @@
 #       python3-rpi.gpio \
 #       fonts-dejavu-core
 #
-# Note: lldpd is NOT required. RaspberryFluke uses raw AF_PACKET
+# Note: lldpd is NOT required. PiScout uses raw AF_PACKET
 # sockets to capture LLDP and CDP frames directly from the wire.
 #
 # ============================================================
@@ -39,7 +39,7 @@
 # Step 3 — Waveshare LCD library (optional, LCD display only)
 # ============================================================
 #
-# Only required if DISPLAY_TYPE = "lcd" in rfconfig.py.
+# Only required if DISPLAY_TYPE = "lcd" in config.py.
 # The e-paper display is the recommended and default display.
 #
 # ============================================================
