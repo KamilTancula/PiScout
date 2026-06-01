@@ -116,7 +116,7 @@ If no switch data is received within 120 seconds, the display shows "No active n
 
 ---
 
-## Installation
+## **Installation**
 
 ### Step 1. Flash the SD card
 
@@ -132,8 +132,13 @@ During the imaging process, configure the following in Raspberry Pi Imager's set
 Insert the SD card, connect power, and SSH into the device. Then update the system:
 
 ```bash
-sudo apt update && sudo apt upgrade -y
+sudo apt update
 ```
+
+```bash
+sudo apt upgrade -y
+```
+
 
 ### Step 3. Install git
 
@@ -177,7 +182,7 @@ The service should show `active (running)`. PiScout will now start automatically
 - Confirms it is being run as root — refuses to proceed if not
 - Confirms PiScout files exist in `/opt/piscout` — refuses to proceed if the repo was not cloned first
 
-#### Step 1 — System packages
+##### Step 1. — System packages
 Installs the following via `apt-get`:
 - `git` — for cloning repositories
 - `python3` and `python3-pip` — Python runtime
@@ -186,7 +191,7 @@ Installs the following via `apt-get`:
 - `fonts-dejavu-core` — the font used on the display
 - `snmp` — provides `snmpget` and `snmpwalk` for active switch discovery
 
-#### Step 2 — Boot time optimizations
+##### Step 2. — Boot time optimizations
 
 Hardware changes written to `/boot/firmware/config.txt`:
 - Disables Bluetooth (not needed, saves 3-5 seconds)
@@ -215,7 +220,7 @@ Network manager replacement:
 Cloud-init lockout:
 - Creates `/etc/cloud/cloud-init.disabled` — prevents cloud-init from running even if service masks are removed
 
-#### Step 3 — SPI interface
+##### Step 3. — SPI interface
 - Checks if SPI is already enabled
 - If not, adds `dtparam=spi=on` to `config.txt`
 - SPI is required for the e-paper display to communicate with the Pi
@@ -227,12 +232,12 @@ Cloud-init lockout:
 - Promiscuous mode is required to receive LLDP and CDP multicast frames
 - Reloads udev rules immediately
 
-#### Step 5 — Journal persistence
+##### Step 5. — Journal persistence
 - Creates `/var/log/journal/` to enable persistent log storage
 - Configures `Storage=persistent` so logs survive reboots and hard power cuts
 - Sets `SyncIntervalSec=10s` so at most 10 seconds of logs are lost on a hard power cut
 
-#### Step 6 — Waveshare e-Paper library
+##### Step 6. — Waveshare e-Paper library
 - Clones the official Waveshare e-Paper repository to `/opt/waveshare-epaper`
 - Copies only the Python driver folder (`waveshare_epd/`) into `/opt/piscout/`
 - Deletes the full Waveshare clone after copying
@@ -252,7 +257,7 @@ Cloud-init lockout:
 - Enables the service to start on every boot
 - Starts the service immediately
 
-#### At the end
+##### At the end
 - Prints a completion summary
 - Warns that a reboot is required for hardware changes to take effect
 
