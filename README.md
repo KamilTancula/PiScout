@@ -467,3 +467,9 @@ sudo remount-rw
 sudo remount-ro
 sudo reboot
 ```
+
+## Community Designs
+
+- RaspberryFluke 3D Printed Handheld Case by [darkparrot95](https://github.com/darkparrot95)
+    - https://makerworld.com/en/models/2762958-pi-zero-case-for-mkwb-s-raspberry-fluke#profileId-3067740
+    - https://github.com/darkparrot95/Pi-Zero-Fluke-Tester-Case/tree/main
