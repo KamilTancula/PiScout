@@ -215,6 +215,7 @@ Name=eth0
 
 [Network]
 DHCP=yes
+LinkLocalAddressing=fallback
 
 [DHCP]
 RouteMetric=100
