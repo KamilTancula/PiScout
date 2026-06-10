@@ -107,14 +107,39 @@ def _truncate(text: str, max_len: int) -> str:
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
-def build_display_lines(neighbor: dict) -> list[str]:
-    """Build the 5 body lines for a valid neighbor result."""
+def _format_link_line(interface: str) -> str:
+    """
+    Build the LINK line from live sysfs state.
+
+    Speed is read from /sys/class/net/{iface}/speed (Mbps integer).
+    Duplex is read from /sys/class/net/{iface}/duplex ("full" or "half").
+    Returns e.g. "LINK: 1G FD", "LINK: 100M HD", "LINK: --" if not negotiated.
+    """
+    speed = _read_link_speed(interface)
+    if speed <= 0:
+        return "LINK: --"
+
+    speed_str = f"{speed // 1000}G" if speed >= 1000 else f"{speed}M"
+
+    duplex_path = Path(f"/sys/class/net/{interface}/duplex")
+    try:
+        duplex_raw = duplex_path.read_text(encoding="ascii").strip().lower()
+        duplex_str = "FD" if duplex_raw == "full" else "HD"
+    except Exception:
+        duplex_str = "?"
+
+    return f"LINK: {speed_str} {duplex_str}"
+
+
+def build_display_lines(neighbor: dict, interface: str) -> list[str]:
+    """Build the 6 body lines for a valid neighbor result."""
     return [
         f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 18)}",
         f"IP: {_truncate(neighbor.get('switch_ip',   'Unknown'), 18)}",
         f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 16)}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
         f"VOICE: {neighbor.get('voice_vlan', 'None')}",
+        _format_link_line(interface),
     ]
 
 
@@ -391,7 +416,7 @@ def run() -> None:
             if not shutdown_event.is_set():
                 protocol = result.get("protocol", "")
                 display.set_startup_mode(False)
-                _show(display, build_display_lines(result), force=True, protocol=protocol)
+                _show(display, build_display_lines(result, interface), force=True, protocol=protocol)
                 displayed = True
                 history.record(result)
                 log.info(
@@ -445,7 +470,7 @@ def run() -> None:
                     current_result[0] = fresh
                     _show(
                         display,
-                        build_display_lines(fresh),
+                        build_display_lines(fresh, interface),
                         force=True,
                         protocol=fresh.get("protocol", ""),
                     )
@@ -486,7 +511,7 @@ def run() -> None:
                     best = current_result[0]
                     protocol = best.get("protocol", "")
                     display.set_startup_mode(False)
-                    _show(display, build_display_lines(best), force=True, protocol=protocol)
+                    _show(display, build_display_lines(best, interface), force=True, protocol=protocol)
                     displayed = True
                     history.record(best)
                     log.info(
@@ -502,7 +527,7 @@ def run() -> None:
                     best = current_result[0]
                     protocol = best.get("protocol", "")
                     display.set_startup_mode(False)
-                    _show(display, build_display_lines(best), force=True, protocol=protocol)
+                    _show(display, build_display_lines(best, interface), force=True, protocol=protocol)
                     displayed = True
                     history.record(best)
                     log.info(

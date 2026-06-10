@@ -42,8 +42,8 @@ class EPaperDisplay:
     LEFT_MARGIN = 10
     TOP_MARGIN  = 4
 
-    # Font settings for the 5 body lines.
-    BASE_FONT_SIZE = 16
+    # Font settings for the 6 body lines.
+    BASE_FONT_SIZE = 14
     MIN_FONT_SIZE  = 10
     LINE_SPACING   = 2
 
@@ -171,7 +171,7 @@ class EPaperDisplay:
         with self.lock:
             self._ensure_awake()
             self.epd.Clear(0xFF)
-            self.last_lines            = ["", "", "", "", ""]
+            self.last_lines            = ["", "", "", "", "", ""]
             self.last_refresh_time     = time.monotonic()
             self.partial_refresh_count = self._partial_refresh_limit
 
@@ -206,7 +206,7 @@ class EPaperDisplay:
                 try:
                     self._ensure_awake()
                     self.epd.Clear(0xFF)
-                    self.last_lines        = ["", "", "", "", ""]
+                    self.last_lines        = ["", "", "", "", "", ""]
                     self.last_refresh_time = time.monotonic()
                 except Exception:
                     pass
@@ -464,7 +464,7 @@ class EPaperDisplay:
 
     def _important_fields_changed(self, new_lines):
         """
-        Check whether VLAN (index 3) or VOICE (index 4) changed.
+        Check whether VLAN (index 3), VOICE (index 4), or LINK (index 5) changed.
 
         These fields trigger an immediate refresh, bypassing the normal
         minimum refresh interval, so the technician sees changes right away.
@@ -475,6 +475,7 @@ class EPaperDisplay:
         return (
             self.last_lines[3] != new_lines[3]
             or self.last_lines[4] != new_lines[4]
+            or self.last_lines[5] != new_lines[5]
         )
 
     def _refresh_allowed(self):

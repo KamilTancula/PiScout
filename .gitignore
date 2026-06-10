@@ -21,8 +21,6 @@ build/
 # Environment files
 .env
 
-# Claude Code local settings
-.claude/
 
 # Editor files
 *.swp

@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 
 
-def normalize_display_lines(lines, max_lines: int = 5) -> list:
+def normalize_display_lines(lines, max_lines: int = 6) -> list:
     """
     Normalize a list of display lines to exactly max_lines clean strings.
 
