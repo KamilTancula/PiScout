@@ -17,10 +17,10 @@ old partial-refresh scheme on the 2.13" panel.
 
 What this file does:
 - Start the e-paper display in 1-bit (black/white) mode
-- Draw a fixed header and 6 body lines onto a 480x280 image
+- Draw a fixed header and 7 body lines onto a 480x280 image
 - Show that image using fast or full refresh as appropriate
 - Limit how often the screen refreshes
-- Force a refresh when PORT, VLAN, or LINK changes
+- Force a refresh when PORT, VLAN, DHCP, or LINK changes
 - Manage ghosting by forcing a full refresh every N fast updates
 - Put the display to sleep when appropriate
 
@@ -61,8 +61,13 @@ class EPaperDisplay:
     LEFT_MARGIN = 14
     TOP_MARGIN  = 6
 
-    # Font settings for the 6 body lines.
-    BASE_FONT_SIZE = 28
+    # Number of body lines below the header:
+    # SW / IP / PORT / DESC / VLAN / DHCP / LINK
+    BODY_LINES = 7
+
+    # Font settings for the body lines. 26px keeps 7 lines within the
+    # 280px panel height (header ~50px + 7 x (26+6) = ~274px).
+    BASE_FONT_SIZE = 26
     MIN_FONT_SIZE  = 16
     LINE_SPACING   = 6
 
@@ -189,7 +194,7 @@ class EPaperDisplay:
         with self.lock:
             self._ensure_awake()
             self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
-            self.last_lines         = ["", "", "", "", "", ""]
+            self.last_lines         = [""] * self.BODY_LINES
             self.last_refresh_time  = time.monotonic()
             self.fast_refresh_count = self._fast_refresh_limit
 
@@ -224,7 +229,7 @@ class EPaperDisplay:
                 try:
                     self._ensure_awake()
                     self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
-                    self.last_lines        = ["", "", "", "", "", ""]
+                    self.last_lines        = [""] * self.BODY_LINES
                     self.last_refresh_time = time.monotonic()
                 except Exception:
                     pass
@@ -272,7 +277,7 @@ class EPaperDisplay:
             False if the update was skipped.
         """
         with self.lock:
-            normalized_lines = normalize_display_lines(lines)
+            normalized_lines = normalize_display_lines(lines, self.BODY_LINES)
             protocol_label   = str(protocol).upper().strip()[:4] if protocol else ""
 
             # Skip if body text and protocol are identical to what is on screen.
@@ -486,11 +491,12 @@ class EPaperDisplay:
 
     def _important_fields_changed(self, new_lines):
         """
-        Check whether PORT (index 2), VLAN (index 4), or LINK (index 5) changed.
+        Check whether PORT (index 2), VLAN (index 4), DHCP (index 5),
+        or LINK (index 6) changed.
 
-        Line order is SW, IP, PORT, DESC, VLAN, LINK. These fields trigger
-        an immediate refresh, bypassing the normal minimum refresh interval,
-        so the technician sees changes right away.
+        Line order is SW, IP, PORT, DESC, VLAN, DHCP, LINK. These fields
+        trigger an immediate refresh, bypassing the normal minimum refresh
+        interval, so the technician sees changes right away.
         """
         if self.last_lines is None:
             return True
@@ -499,6 +505,7 @@ class EPaperDisplay:
             self.last_lines[2] != new_lines[2]
             or self.last_lines[4] != new_lines[4]
             or self.last_lines[5] != new_lines[5]
+            or self.last_lines[6] != new_lines[6]
         )
 
     def _refresh_allowed(self):

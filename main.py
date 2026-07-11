@@ -131,17 +131,62 @@ def _format_link_line(interface: str) -> str:
     return f"LINK: {speed_str} {duplex_str}"
 
 
+def _get_interface_ipv4(interface: str) -> str:
+    """
+    Read the current IPv4 address of an interface directly from the kernel
+    (SIOCGIFADDR ioctl). Uses only the standard library, no subprocess.
+
+    Returns "" when the interface has no IPv4 address.
+    """
+    import fcntl
+    import socket
+    import struct
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            packed = fcntl.ioctl(
+                sock.fileno(),
+                0x8915,  # SIOCGIFADDR
+                struct.pack("256s", interface[:15].encode("ascii")),
+            )
+            return socket.inet_ntoa(packed[20:24])
+        finally:
+            sock.close()
+    except OSError:
+        return ""
+
+
+def _format_dhcp_line(interface: str) -> str:
+    """
+    Build the DHCP line from the live interface state.
+
+    eth0 on this device is always configured for DHCP, so a present
+    address means a lease was obtained. A 169.254.x.x address is the
+    link-local fallback assigned when no DHCP server answered, so it
+    counts as "no DHCP" for diagnostic purposes.
+
+    Returns e.g. "DHCP: 192.168.1.23" or "DHCP: no".
+    """
+    ip = _get_interface_ipv4(interface)
+    if not ip or ip.startswith("169.254."):
+        return "DHCP: no"
+    return f"DHCP: {ip}"
+
+
 def build_display_lines(neighbor: dict, interface: str) -> list[str]:
     """
-    Build the 6 body lines for a valid neighbor result.
+    Build the 7 body lines for a valid neighbor result.
 
     Layout for the 3.7" 480x280 e-paper panel:
-        SW / IP / PORT / DESC / VLAN / LINK
+        SW / IP / PORT / DESC / VLAN / DHCP / LINK
 
     The voice VLAN is intentionally not shown — it remains in the
     result dict and history for debugging, but has no display line.
     DESC shows the operator-configured port description (LLDP TLV 4
     or SNMP ifAlias); "--" is shown when no description is configured.
+    DHCP shows the address obtained on eth0, or "no" when no lease
+    was obtained (link-local fallback counts as no lease).
     """
     port_desc = str(neighbor.get("port_desc", "")).strip()
     return [
@@ -150,6 +195,7 @@ def build_display_lines(neighbor: dict, interface: str) -> list[str]:
         f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 26)}",
         f"DESC: {_truncate(port_desc, 30) if port_desc else '--'}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
+        _format_dhcp_line(interface),
         _format_link_line(interface),
     ]
 
