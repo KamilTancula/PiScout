@@ -279,6 +279,7 @@ def parse_cdp_frame(frame: bytes) -> dict[str, str]:
         "switch_name": "",
         "switch_ip":   "",
         "port":        "",
+        "port_desc":   "",   # CDP carries no port description TLV
         "vlan":        "",
         "voice_vlan":  "",
     }

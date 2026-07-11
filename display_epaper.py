@@ -1,15 +1,27 @@
 """
 display_epaper.py
 
-This file only handles the Waveshare 2.13" V3 e-paper display.
+This file only handles the Waveshare 3.7" e-paper display (epd3in7).
+
+The panel is natively 280x480 portrait. PiScout renders a 480x280
+landscape image; the Waveshare driver's getbuffer() detects the swapped
+dimensions and rotates the image into panel orientation automatically.
+
+Refresh strategy (epd3in7 has no displayPartBaseImage/displayPartial):
+- Fast update : display_1Gray() with the A2 LUT — quick, minimal flash,
+                but accumulates ghosting over time.
+- Full refresh: Clear(0xFF, 1) followed by display_1Gray() — slower,
+                visible flash, wipes ghosting completely.
+A counter forces a full refresh every N fast updates, exactly like the
+old partial-refresh scheme on the 2.13" panel.
 
 What this file does:
-- Start the e-paper display
-- Draw a fixed header and 5 body lines onto an image
-- Show that image on the screen using partial or full refresh as appropriate
+- Start the e-paper display in 1-bit (black/white) mode
+- Draw a fixed header and 6 body lines onto a 480x280 image
+- Show that image using fast or full refresh as appropriate
 - Limit how often the screen refreshes
-- Force a refresh when VLAN or VOICE changes
-- Manage ghosting by forcing a full refresh every N partial refreshes
+- Force a refresh when PORT, VLAN, or LINK changes
+- Manage ghosting by forcing a full refresh every N fast updates
 - Put the display to sleep when appropriate
 
 What this file does NOT do:
@@ -25,7 +37,7 @@ import threading
 import time
 
 from PIL import Image, ImageDraw, ImageFont
-from waveshare_epd import epd2in13_V3
+from waveshare_epd import epd3in7
 
 from parse_utils import normalize_display_lines
 
@@ -34,32 +46,42 @@ log = logging.getLogger(__name__)
 
 
 class EPaperDisplay:
-    # Screen size in pixels for the Waveshare 2.13" V3 display.
-    DISPLAY_WIDTH  = 250
-    DISPLAY_HEIGHT = 122
+    # Logical screen size in pixels — 3.7" panel used in landscape.
+    # (The panel is natively 280x480 portrait; the driver rotates.)
+    DISPLAY_WIDTH  = 480
+    DISPLAY_HEIGHT = 280
+
+    # Set to False if the enclosure orientation puts the image upside down.
+    ROTATE_180 = True
+
+    # 1-Gray (black/white) mode for the epd3in7 driver.
+    _EPD_MODE_1GRAY = 1
 
     # Text position on the screen.
-    LEFT_MARGIN = 10
-    TOP_MARGIN  = 4
+    LEFT_MARGIN = 14
+    TOP_MARGIN  = 6
 
     # Font settings for the 6 body lines.
-    BASE_FONT_SIZE = 14
-    MIN_FONT_SIZE  = 10
-    LINE_SPACING   = 2
+    BASE_FONT_SIZE = 28
+    MIN_FONT_SIZE  = 16
+    LINE_SPACING   = 6
 
     # Fixed header drawn at the top of every screen.
     TITLE_TEXT       = "PiScout"
-    TITLE_FONT_SIZE  = 16
-    TITLE_UNDERLINE_GAP = 1
-    TITLE_BODY_GAP      = 2
+    TITLE_FONT_SIZE  = 30
+    TITLE_UNDERLINE_GAP = 2
+    TITLE_BODY_GAP      = 6
+
+    # Small font size used for the protocol indicator in the header.
+    PROTO_FONT_SIZE = 16
 
     # Default font file.
     DEFAULT_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    # Number of partial refreshes before a full refresh is forced to clear ghosting.
-    # Starting the counter at this limit ensures the very first render is always
-    # a full refresh, giving a clean slate on boot.
-    PARTIAL_REFRESH_LIMIT = 8
+    # Number of fast (A2) refreshes before a full refresh is forced to
+    # clear ghosting. Starting the counter at this limit ensures the very
+    # first render is always a full refresh, giving a clean slate on boot.
+    FAST_REFRESH_LIMIT = 8
 
     def __init__(
         self,
@@ -87,7 +109,8 @@ class EPaperDisplay:
             real result arrives.
 
         partial_refresh_limit:
-            Override for PARTIAL_REFRESH_LIMIT. Useful for testing.
+            Override for FAST_REFRESH_LIMIT. The parameter keeps its old
+            name so existing config/main.py wiring continues to work.
         """
         self.font_path            = font_path or self.DEFAULT_FONT_PATH
         self.min_refresh_interval = min_refresh_interval
@@ -95,14 +118,14 @@ class EPaperDisplay:
         self.startup_mode         = startup_mode
 
         # Allow the limit to be overridden at construction time.
-        self._partial_refresh_limit = (
+        self._fast_refresh_limit = (
             int(partial_refresh_limit)
             if partial_refresh_limit is not None
-            else self.PARTIAL_REFRESH_LIMIT
+            else self.FAST_REFRESH_LIMIT
         )
 
         # Create the Waveshare display object.
-        self.epd = epd2in13_V3.EPD()
+        self.epd = epd3in7.EPD()
 
         # RLock allows one method to safely call another method that also uses
         # the same lock, which happens during sleep/wake sequences.
@@ -113,14 +136,9 @@ class EPaperDisplay:
         self.sleeping    = False
 
         # Start at the limit so the first render always performs a full refresh.
-        self.partial_refresh_count = self._partial_refresh_limit
+        self.fast_refresh_count = self._fast_refresh_limit
 
-        # Tracks whether displayPartBaseImage has been called at least once.
-        # Partial refresh requires both frame buffers to be seeded first.
-        # Until this is True, every refresh is forced to be a full refresh.
-        self._partial_base_ready = False
-
-        # Save the last 5 normalized body lines shown on screen.
+        # Save the last 6 normalized body lines shown on screen.
         self.last_lines      = None
         self._last_protocol  = ""
 
@@ -139,7 +157,7 @@ class EPaperDisplay:
 
     def initialize(self, clear_on_start=False):
         """
-        Start the e-paper display.
+        Start the e-paper display in 1-bit mode.
 
         clear_on_start:
             If True, clear the screen to white when starting up.
@@ -150,13 +168,13 @@ class EPaperDisplay:
             if self.initialized and not self.sleeping:
                 return
 
-            self.epd.init()
+            self.epd.init(self._EPD_MODE_1GRAY)
             self.initialized = True
             self.sleeping    = False
 
             # After any hardware init, the next display call must be a full
             # refresh to ensure a clean starting state.
-            self.partial_refresh_count = self._partial_refresh_limit
+            self.fast_refresh_count = self._fast_refresh_limit
 
             if clear_on_start:
                 self.clear()
@@ -170,10 +188,10 @@ class EPaperDisplay:
         """
         with self.lock:
             self._ensure_awake()
-            self.epd.Clear(0xFF)
-            self.last_lines            = ["", "", "", "", "", ""]
-            self.last_refresh_time     = time.monotonic()
-            self.partial_refresh_count = self._partial_refresh_limit
+            self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+            self.last_lines         = ["", "", "", "", "", ""]
+            self.last_refresh_time  = time.monotonic()
+            self.fast_refresh_count = self._fast_refresh_limit
 
             if sleep_after and self.auto_sleep and not self.startup_mode:
                 self.sleep()
@@ -205,7 +223,7 @@ class EPaperDisplay:
             if clear_before_sleep:
                 try:
                     self._ensure_awake()
-                    self.epd.Clear(0xFF)
+                    self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
                     self.last_lines        = ["", "", "", "", "", ""]
                     self.last_refresh_time = time.monotonic()
                 except Exception:
@@ -235,14 +253,15 @@ class EPaperDisplay:
 
     def show_lines(self, lines, force=False, protocol=""):
         """
-        Show 5 body lines on the e-paper display.
+        Show 6 body lines on the e-paper display.
 
         The fixed "PiScout" header and underline are always drawn
         by this method. The caller does not need to include a header in lines.
 
         lines:
-            A list of up to 5 body text strings to show below the header.
-            Missing lines are filled with blank strings.
+            A list of up to 6 body text strings to show below the header.
+            Missing lines are filled with blank strings. Expected order:
+            SW, IP, PORT, DESC, VLAN, LINK.
 
         force:
             If True, refresh the display regardless of whether content changed
@@ -260,7 +279,7 @@ class EPaperDisplay:
             if not force and normalized_lines == self.last_lines and protocol_label == self._last_protocol:
                 return False
 
-            # VLAN or VOICE changes always trigger an immediate refresh,
+            # PORT, VLAN, or LINK changes always trigger an immediate refresh,
             # bypassing the normal minimum refresh interval.
             if self._important_fields_changed(normalized_lines):
                 force = True
@@ -273,36 +292,33 @@ class EPaperDisplay:
             image  = self._render_image(normalized_lines, protocol_label)
             buffer = self.epd.getbuffer(image)
 
-            # Decide between partial and full refresh.
-            if self.partial_refresh_count >= self._partial_refresh_limit or not self._partial_base_ready:
-                # Full refresh: clears ghosting and seeds both e-paper frame
-                # buffers via displayPartBaseImage. Both buffers must be seeded
-                # before displayPartial can run without ghosting.
-                self.epd.Clear(0xFF)
-                self.epd.displayPartBaseImage(buffer)
-                self.partial_refresh_count  = 0
-                self._partial_base_ready    = True
+            # Decide between fast and full refresh.
+            if self.fast_refresh_count >= self._fast_refresh_limit:
+                # Full refresh: clear to white first, then draw. The white
+                # wipe plus redraw removes accumulated A2-LUT ghosting.
+                self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+                self.epd.display_1Gray(buffer)
+                self.fast_refresh_count = 0
                 log.debug("Full refresh performed (ghost prevention or first render)")
             else:
-                # Partial refresh: faster, avoids full-screen flash.
+                # Fast refresh: A2 LUT update, quick and nearly flash-free.
                 try:
-                    self.epd.displayPartial(buffer)
-                    self.partial_refresh_count += 1
+                    self.epd.display_1Gray(buffer)
+                    self.fast_refresh_count += 1
                     log.debug(
-                        "Partial refresh performed (%d/%d)",
-                        self.partial_refresh_count,
-                        self._partial_refresh_limit,
+                        "Fast refresh performed (%d/%d)",
+                        self.fast_refresh_count,
+                        self._fast_refresh_limit,
                     )
                 except Exception:
-                    # If partial refresh fails, fall back to a full refresh.
+                    # If the fast update fails, fall back to a full refresh.
                     log.warning(
-                        "Partial refresh failed. Falling back to full refresh.",
+                        "Fast refresh failed. Falling back to full refresh.",
                         exc_info=True,
                     )
-                    self.epd.Clear(0xFF)
-                    self.epd.displayPartBaseImage(buffer)
-                    self.partial_refresh_count = 0
-                    self._partial_base_ready   = True
+                    self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+                    self.epd.display_1Gray(buffer)
+                    self.fast_refresh_count = 0
 
             self.last_lines        = normalized_lines
             self._last_protocol    = protocol_label
@@ -317,7 +333,7 @@ class EPaperDisplay:
         """
         Refresh the current screen contents again.
 
-        This redraws the same body lines and resets the partial refresh
+        This redraws the same body lines and resets the fast refresh
         counter so the next call performs a full refresh.
 
         Returns:
@@ -329,7 +345,7 @@ class EPaperDisplay:
                 return False
 
             # Reset the counter so the forced refresh is always a full refresh.
-            self.partial_refresh_count = self._partial_refresh_limit
+            self.fast_refresh_count = self._fast_refresh_limit
             return self.show_lines(self.last_lines, force=True)
 
     def get_status(self):
@@ -346,8 +362,8 @@ class EPaperDisplay:
                 "last_refresh_time":       self.last_refresh_time,
                 "min_refresh_interval":    self.min_refresh_interval,
                 "auto_sleep":              self.auto_sleep,
-                "partial_refresh_count":   self.partial_refresh_count,
-                "partial_refresh_limit":   self._partial_refresh_limit,
+                "fast_refresh_count":      self.fast_refresh_count,
+                "fast_refresh_limit":      self._fast_refresh_limit,
             }
 
     # ------------------------------------------------------------------ #
@@ -387,7 +403,7 @@ class EPaperDisplay:
 
     def _render_image(self, body_lines, protocol=""):
         """
-        Turn the 5 normalized body lines into a display image.
+        Turn the 6 normalized body lines into a 480x280 display image.
 
         Always draws the fixed "PiScout" header with an underline,
         then renders each body line below it.
@@ -414,7 +430,9 @@ class EPaperDisplay:
         # Draw protocol indicator (e.g. "SNMP", "LLDP", "CDP") right-aligned
         # in the header row using a small font so it doesn't crowd the title.
         if protocol:
-            proto_font  = self.font_cache.get(9, self.font_cache[self.MIN_FONT_SIZE])
+            proto_font  = self.font_cache.get(
+                self.PROTO_FONT_SIZE, self.font_cache[self.MIN_FONT_SIZE]
+            )
             proto_text  = str(protocol).upper()[:4]
             proto_width = int(draw.textlength(proto_text, font=proto_font))
             proto_x     = self.DISPLAY_WIDTH - self.LEFT_MARGIN - proto_width
@@ -427,7 +445,7 @@ class EPaperDisplay:
         draw.line(
             (header_bbox[0], underline_y, header_bbox[2], underline_y),
             fill=0,
-            width=1,
+            width=2,
         )
 
         # Body starts below the underline.
@@ -449,8 +467,12 @@ class EPaperDisplay:
             draw.text((self.LEFT_MARGIN, y), line, font=font, fill=0)
             y += font.size + self.LINE_SPACING
 
-        # Rotate so that the Ethernet port is at the top of the physical device.
-        return image.rotate(180)
+        # Rotate so the image matches the physical mounting orientation.
+        # The Waveshare getbuffer() handles the landscape->portrait mapping;
+        # this 180-degree flip only controls which edge is "up".
+        if self.ROTATE_180:
+            return image.rotate(180)
+        return image
 
     def _fit_font_for_line(self, draw, text, max_width):
         """
@@ -464,16 +486,17 @@ class EPaperDisplay:
 
     def _important_fields_changed(self, new_lines):
         """
-        Check whether VLAN (index 3), VOICE (index 4), or LINK (index 5) changed.
+        Check whether PORT (index 2), VLAN (index 4), or LINK (index 5) changed.
 
-        These fields trigger an immediate refresh, bypassing the normal
-        minimum refresh interval, so the technician sees changes right away.
+        Line order is SW, IP, PORT, DESC, VLAN, LINK. These fields trigger
+        an immediate refresh, bypassing the normal minimum refresh interval,
+        so the technician sees changes right away.
         """
         if self.last_lines is None:
             return True
 
         return (
-            self.last_lines[3] != new_lines[3]
+            self.last_lines[2] != new_lines[2]
             or self.last_lines[4] != new_lines[4]
             or self.last_lines[5] != new_lines[5]
         )
@@ -490,17 +513,17 @@ class EPaperDisplay:
         Make sure the display is ready to receive a new image.
 
         If the display was never started or was sleeping, call init() to
-        wake it. After any hardware init, the partial refresh counter is
+        wake it. After any hardware init, the fast refresh counter is
         reset to the limit so the next display call performs a full refresh.
         """
         if not self.initialized:
-            self.epd.init()
-            self.initialized           = True
-            self.sleeping              = False
-            self.partial_refresh_count = self._partial_refresh_limit
+            self.epd.init(self._EPD_MODE_1GRAY)
+            self.initialized        = True
+            self.sleeping           = False
+            self.fast_refresh_count = self._fast_refresh_limit
             return
 
         if self.sleeping:
-            self.epd.init()
-            self.sleeping              = False
-            self.partial_refresh_count = self._partial_refresh_limit
+            self.epd.init(self._EPD_MODE_1GRAY)
+            self.sleeping           = False
+            self.fast_refresh_count = self._fast_refresh_limit

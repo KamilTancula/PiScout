@@ -79,6 +79,9 @@ if not _SNMP_AVAILABLE:
 
 _OID_SYS_NAME            = "1.3.6.1.2.1.1.5.0"
 _OID_IF_DESCR            = "1.3.6.1.2.1.2.2.1.2"
+# IF-MIB::ifAlias — the operator-configured interface description.
+# Standard MIB, supported identically by Cisco IOS/IOS-XE and Huawei VRP.
+_OID_IF_ALIAS            = "1.3.6.1.2.1.31.1.1.1.18"
 _OID_BRIDGE_FDB_PORT     = "1.3.6.1.2.1.17.4.3.1.2"
 _OID_BRIDGE_PORT_IFIDX   = "1.3.6.1.2.1.17.1.4.1.2"
 _OID_CDP_CACHE_DEVICE_ID = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"
@@ -457,6 +460,38 @@ def _snmp_walk(
     return []
 
 
+def _get_port_desc(
+    host:      str,
+    community: str,
+    if_index:  int,
+    port_name: str,
+) -> str:
+    """
+    Fetch the operator-configured port description via IF-MIB::ifAlias.
+
+    Works on both Cisco (IOS/IOS-XE "description" command) and Huawei
+    (VRP "description" command) since ifAlias is a standard IF-MIB
+    object.
+
+    Returns "" when the alias is unset or merely repeats the interface
+    name, so the display never shows a duplicate of the PORT line.
+    """
+    alias = _snmp_get(host, community, f"{_OID_IF_ALIAS}.{if_index}")
+    if not alias:
+        return ""
+
+    alias = alias.strip()
+    if not alias:
+        return ""
+
+    short_alias = parse_utils.shorten_interface_name(alias)
+    short_port  = parse_utils.shorten_interface_name(str(port_name or "").strip())
+    if short_port and short_alias.lower() == short_port.lower():
+        return ""
+
+    return alias
+
+
 # ============================================================
 # Port discovery methods
 # ============================================================
@@ -504,9 +539,11 @@ def _find_port_cdp_mib(
         port_name   = _snmp_get(host, community, f"{_OID_IF_DESCR}.{if_index}")
         native_vlan = _snmp_get(host, community, f"{_OID_CDP_NATIVE_VLAN}.{if_index}.{device_index}")
         voice_vlan  = _snmp_get(host, community, f"{_OID_CDP_VOICE_VLAN}.{if_index}.{device_index}")
+        port_desc   = _get_port_desc(host, community, if_index, port_name or "")
 
         return {
             "port_name":  str(port_name  or "").strip(),
+            "port_desc":  port_desc,
             "vlan":       str(native_vlan or "").strip(),
             "voice_vlan": str(voice_vlan  or "").strip(),
         }
@@ -554,9 +591,11 @@ def _find_port_lldp_mib(
         cisco_vlan = _snmp_get(host, community, f"{_OID_CISCO_VM_VLAN}.{if_index}")
         dot1q_vlan = _snmp_get(host, community, f"{_OID_DOT1Q_PVID}.{if_index}")
         vlan       = str(cisco_vlan or dot1q_vlan or "").strip()
+        port_desc  = _get_port_desc(host, community, if_index, port_name)
 
         return {
             "port_name":  port_name,
+            "port_desc":  port_desc,
             "vlan":       vlan,
             "voice_vlan": "",
         }
@@ -646,6 +685,7 @@ def _find_port_bridge_mib(
     port_name   = _snmp_get(host, community, f"{_OID_IF_DESCR}.{if_index}")
     cisco_vlan  = _snmp_get(host, community, f"{_OID_CISCO_VM_VLAN}.{if_index}")
     voice_vlan  = _snmp_get(host, community, f"{_OID_CISCO_VOICE_VLAN}.{if_index}")
+    port_desc   = _get_port_desc(host, community, if_index, port_name or "")
 
     if not vlan:
         dot1q_vlan = _snmp_get(host, community, f"{_OID_DOT1Q_PVID}.{if_index}")
@@ -653,6 +693,7 @@ def _find_port_bridge_mib(
 
     return {
         "port_name":  str(port_name  or "").strip(),
+        "port_desc":  port_desc,
         "vlan":       vlan,
         "voice_vlan": str(voice_vlan or "").strip(),
     }
@@ -713,6 +754,7 @@ def _query_switch(
         return None
 
     port_name = parse_utils.shorten_interface_name(port_info.get("port_name", ""))
+    port_desc = parse_utils.sanitize_display_string(port_info.get("port_desc", ""))
     vlan      = parse_utils.normalize_vlan_value(port_info.get("vlan", ""))
     voice     = parse_utils.normalize_vlan_value(port_info.get("voice_vlan", ""))
 
@@ -725,15 +767,17 @@ def _query_switch(
         "switch_name": switch_name,
         "switch_ip":   gateway,
         "port":        port_name,
+        "port_desc":   port_desc,
         "vlan":        vlan,
         "voice_vlan":  voice,
     }
 
     log.info(
-        "SNMP discovery success | switch=%s ip=%s port=%s vlan=%s voice=%s",
+        "SNMP discovery success | switch=%s ip=%s port=%s desc=%s vlan=%s voice=%s",
         result["switch_name"],
         result["switch_ip"],
         result["port"],
+        result["port_desc"],
         result["vlan"],
         result["voice_vlan"],
     )

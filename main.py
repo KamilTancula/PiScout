@@ -132,13 +132,24 @@ def _format_link_line(interface: str) -> str:
 
 
 def build_display_lines(neighbor: dict, interface: str) -> list[str]:
-    """Build the 6 body lines for a valid neighbor result."""
+    """
+    Build the 6 body lines for a valid neighbor result.
+
+    Layout for the 3.7" 480x280 e-paper panel:
+        SW / IP / PORT / DESC / VLAN / LINK
+
+    The voice VLAN is intentionally not shown — it remains in the
+    result dict and history for debugging, but has no display line.
+    DESC shows the operator-configured port description (LLDP TLV 4
+    or SNMP ifAlias); "--" is shown when no description is configured.
+    """
+    port_desc = str(neighbor.get("port_desc", "")).strip()
     return [
-        f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 18)}",
-        f"IP: {_truncate(neighbor.get('switch_ip',   'Unknown'), 18)}",
-        f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 16)}",
+        f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 28)}",
+        f"IP: {_truncate(neighbor.get('switch_ip',   'Unknown'), 28)}",
+        f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 26)}",
+        f"DESC: {_truncate(port_desc, 30) if port_desc else '--'}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
-        f"VOICE: {neighbor.get('voice_vlan', 'None')}",
         _format_link_line(interface),
     ]
 
@@ -420,13 +431,13 @@ def run() -> None:
                 displayed = True
                 history.record(result)
                 log.info(
-                    "Display updated | protocol=%s switch=%s ip=%s port=%s vlan=%s voice=%s",
+                    "Display updated | protocol=%s switch=%s ip=%s port=%s desc=%s vlan=%s",
                     protocol,
                     result.get("switch_name"),
                     result.get("switch_ip"),
                     result.get("port"),
+                    result.get("port_desc"),
                     result.get("vlan"),
-                    result.get("voice_vlan"),
                 )
 
         if shutdown_event.is_set():
@@ -477,13 +488,13 @@ def run() -> None:
                     if is_upgrade:
                         history.record(fresh)
                     log.info(
-                        "Display %s | protocol=%s switch=%s port=%s vlan=%s voice=%s",
+                        "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
                         "upgraded from partial" if is_upgrade else "refreshed",
                         fresh.get("protocol"),
                         fresh.get("switch_name"),
                         fresh.get("port"),
+                        fresh.get("port_desc"),
                         fresh.get("vlan"),
-                        fresh.get("voice_vlan"),
                     )
 
         refresh_thread = threading.Thread(

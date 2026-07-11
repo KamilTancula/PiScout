@@ -187,40 +187,70 @@ def _extract_port(tlvs: dict[int, list[bytes]]) -> str:
     Extract the remote switch port name.
 
     Priority:
-        1. Port Description (type 4) — often contains the full interface
-           name such as "GigabitEthernet1/0/24" on Cisco switches.
-        2. Port ID (type 2) subtype 5 (interface name) or 7 (locally
-           assigned) — the standardized interface identifier.
-        3. Port ID any other string subtype — last resort.
+        1. Port ID (type 2) with a string subtype — the standardized
+           interface identifier (e.g. "Gi1/0/24" on Cisco).
+        2. Port Description (type 4) — fallback when Port ID is absent
+           or MAC-based. On Cisco this often carries the full interface
+           name such as "GigabitEthernet1/0/24".
 
-    MAC-address Port IDs are skipped because a MAC is not a useful
-    port label for a field technician.
+    Port ID is preferred so that the Port Description TLV stays free to
+    serve as the human-configured port description (see
+    _extract_port_desc). MAC-address Port IDs are skipped because a MAC
+    is not a useful port label for a field technician.
     """
-    # Port Description (type 4)
+    # Port ID (type 2)
+    port_values = tlvs.get(_TLV_PORT_ID, [])
+    if port_values:
+        value = port_values[0]
+        if len(value) >= 2:
+            subtype = value[0]
+            data    = value[1:]
+
+            # Skip MAC-based Port IDs — not useful on screen.
+            if subtype != _PORT_SUBTYPE_MAC:
+                port = _decode_string(data)
+                if port:
+                    return shorten_interface_name(port)
+
+    # Port Description (type 4) — fallback only.
     descr_values = tlvs.get(_TLV_PORT_DESCR, [])
     if descr_values:
         descr = _decode_string(descr_values[0])
         if descr:
             return shorten_interface_name(descr)
 
-    # Port ID (type 2)
-    port_values = tlvs.get(_TLV_PORT_ID, [])
-    if not port_values:
+    return ""
+
+
+def _extract_port_desc(tlvs: dict[int, list[bytes]], port: str) -> str:
+    """
+    Extract the human-configured port description from the
+    Port Description TLV (type 4).
+
+    Behavior notes per vendor:
+        Cisco IOS  : sends the configured "description" text if set,
+                     otherwise the full interface name
+                     (e.g. "GigabitEthernet1/0/24").
+        Huawei VRP : sends the configured "description" text if set,
+                     otherwise the interface name.
+
+    To avoid showing a duplicate of the PORT line on the display, the
+    value is discarded when it is just another spelling of the port
+    name (compared after interface-name shortening).
+    """
+    descr_values = tlvs.get(_TLV_PORT_DESCR, [])
+    if not descr_values:
         return ""
 
-    value   = port_values[0]
-    if len(value) < 2:
+    descr = _decode_string(descr_values[0])
+    if not descr:
         return ""
 
-    subtype = value[0]
-    data    = value[1:]
-
-    # Skip MAC-based Port IDs — not useful on screen.
-    if subtype == _PORT_SUBTYPE_MAC:
+    # Drop values that merely repeat the interface name.
+    if port and shorten_interface_name(descr).lower() == port.lower():
         return ""
 
-    port = _decode_string(data)
-    return shorten_interface_name(port)
+    return descr
 
 
 def _extract_management_ip(tlvs: dict[int, list[bytes]]) -> str:
@@ -337,6 +367,7 @@ def parse_lldp_frame(frame: bytes) -> dict[str, str]:
         switch_name : switch hostname (domain stripped)
         switch_ip   : management IP address
         port        : remote switch port name (shortened)
+        port_desc   : configured port description (LLDP TLV type 4)
         vlan        : access/data VLAN ID as a string
         voice_vlan  : voice VLAN ID as a string
 
@@ -347,6 +378,7 @@ def parse_lldp_frame(frame: bytes) -> dict[str, str]:
         "switch_name": "",
         "switch_ip":   "",
         "port":        "",
+        "port_desc":   "",
         "vlan":        "",
         "voice_vlan":  "",
     }
@@ -365,6 +397,7 @@ def parse_lldp_frame(frame: bytes) -> dict[str, str]:
     result["switch_name"] = _extract_switch_name(tlvs)
     result["switch_ip"]   = _extract_management_ip(tlvs)
     result["port"]        = _extract_port(tlvs)
+    result["port_desc"]   = _extract_port_desc(tlvs, result["port"])
 
     vlan, voice_vlan      = _extract_vlan_and_voice(tlvs)
     result["vlan"]        = vlan

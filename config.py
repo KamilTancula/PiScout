@@ -30,7 +30,7 @@ import os
 # ================= USER DISPLAY SELECTION ===================
 # ============================================================
 # Valid values:
-#   "epaper"  = Waveshare 2.13" V3 e-paper display (default)
+#   "epaper"  = Waveshare 3.7" e-paper HAT, 480x280 (default)
 #   "lcd"     = Waveshare 1.44" LCD HAT display
 #
 # Override without editing this file:

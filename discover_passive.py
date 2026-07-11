@@ -146,6 +146,9 @@ def _normalize(parsed: dict, protocol_label: str) -> dict:
         "port":        parse_utils.shorten_interface_name(
                            str(parsed.get("port", "")).strip()
                        ),
+        "port_desc":   parse_utils.sanitize_display_string(
+                           str(parsed.get("port_desc", "")).strip()
+                       ),
         "vlan":        parse_utils.normalize_vlan_value(
                            str(parsed.get("vlan", ""))
                        ),
