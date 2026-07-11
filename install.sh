@@ -16,11 +16,11 @@
 # What this script does:
 #   1.  Checks that it is running as root
 #   2.  Installs required system packages (including snmp tools)
-#   3.  Applies boot time optimizations (BT, WiFi, HDMI, silent boot,
-#       serial console, cloud-init, NetworkManager → systemd-networkd)
+#   3.  Applies boot time optimizations (BT, HDMI, silent boot,
+#       serial console, cloud-init). WiFi and NetworkManager are KEPT
+#       in this fork — the device is managed over SSH via wlan0.
 #   4.  Enables SPI for the e-paper display
 #   5.  Installs udev rule for instant eth0 activation on link-up
-#   6.  Creates systemd-networkd config for eth0
 #   7.  Configures systemd journal persistence
 #   8.  Clones the Waveshare e-Paper library and copies the driver
 #   9.  Sets correct file permissions
@@ -109,15 +109,10 @@ if [[ -n "$BOOT_CONFIG" ]]; then
     systemctl mask    hciuart   2>/dev/null || true
     systemctl mask    bluetooth 2>/dev/null || true
 
-    # -- Disable WiFi --
-    # PiScout uses the wired Ethernet port exclusively.
-    # Disabling WiFi saves ~2-3 seconds of boot time.
-    if ! grep -q "dtoverlay=disable-wifi" "$BOOT_CONFIG" 2>/dev/null; then
-        echo "dtoverlay=disable-wifi" >> "$BOOT_CONFIG"
-        info "WiFi disabled in $BOOT_CONFIG."
-    else
-        info "WiFi already disabled."
-    fi
+    # -- WiFi kept enabled (fork change) --
+    # This fork keeps WiFi active: the device is managed over SSH via
+    # wlan0 while eth0 is dedicated to switch discovery.
+    info "WiFi left enabled (used for SSH management access)."
 
     # -- Disable HDMI --
     # The device runs headless. Disabling HDMI saves ~1-2 seconds.
@@ -184,7 +179,6 @@ MASK_SERVICES=(
     "apt-daily.timer"
     "apt-daily-upgrade.timer"
     "man-db.timer"
-    "NetworkManager.service"
     "NetworkManager-wait-online.service"
     "cloud-init-main.service"
     "cloud-init-local.service"
@@ -199,31 +193,12 @@ done
 # Disable cloud-init via its own flag file — belt and suspenders approach.
 touch /etc/cloud/cloud-init.disabled 2>/dev/null || true
 
-# Switch from NetworkManager to systemd-networkd.
-# systemd-networkd is built into systemd, requires no extra packages,
-# and starts in under 200ms vs NetworkManager's 10-14 seconds.
-systemctl disable NetworkManager 2>/dev/null || true
-systemctl enable  systemd-networkd 2>/dev/null || true
-
-# Create network config for eth0 if it doesn't exist.
-NETWORKD_CONF="/etc/systemd/network/10-eth0.network"
-if [[ ! -f "$NETWORKD_CONF" ]]; then
-    mkdir -p /etc/systemd/network
-    cat > "$NETWORKD_CONF" << 'EOF'
-[Match]
-Name=eth0
-
-[Network]
-DHCP=yes
-LinkLocalAddressing=fallback
-
-[DHCP]
-RouteMetric=100
-EOF
-    info "systemd-networkd config created at $NETWORKD_CONF."
-else
-    info "systemd-networkd config already exists."
-fi
+# NetworkManager is kept (fork change).
+# The upstream project replaces it with systemd-networkd for boot speed,
+# but this fork manages the device over WiFi (wlan0), which is configured
+# through NetworkManager. NM also handles eth0 with DHCP by default, which
+# is exactly what the discovery engine needs.
+info "NetworkManager kept (manages wlan0 for SSH and eth0 via DHCP)."
 
 # Remove serial console from cmdline.txt — it adds latency on boot
 # since we disabled Bluetooth which shared the UART.
@@ -236,7 +211,7 @@ if [[ -n "$CMDLINE_FILE" ]]; then
     fi
 fi
 
-info "Unused services masked. NetworkManager replaced with systemd-networkd."
+info "Unused services masked. NetworkManager kept for WiFi management."
 
 info "Boot optimizations applied. Reboot required for hardware changes to take effect."
 
@@ -388,13 +363,12 @@ info "  sudo journalctl -u ${SERVICE_NAME}.service -f"
 echo ""
 warn "IMPORTANT: A reboot is required for the following changes to take effect:"
 warn "  - Bluetooth disabled"
-warn "  - WiFi disabled"
 warn "  - HDMI blanking"
 warn "  - Silent boot (quiet loglevel=0)"
 warn "  - Boot splash and delay disabled"
 warn "  - Serial console removed"
 warn "  - SPI enabled (if newly configured)"
 warn "  - udev rule for eth0 fast activation"
-warn "  - NetworkManager replaced with systemd-networkd"
+warn "  - WiFi and NetworkManager kept (SSH management over wlan0)"
 warn ""
 warn "Run: sudo reboot"
