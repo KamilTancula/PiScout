@@ -149,6 +149,10 @@ def _normalize(parsed: dict, protocol_label: str) -> dict:
         "port_desc":   parse_utils.sanitize_display_string(
                            str(parsed.get("port_desc", "")).strip()
                        ),
+        "switch_mac":  str(parsed.get("switch_mac", "")).strip(),
+        "switch_model": parse_utils.sanitize_display_string(
+                           str(parsed.get("switch_model", "")).strip()
+                       ),
         "vlan":        parse_utils.normalize_vlan_value(
                            str(parsed.get("vlan", ""))
                        ),

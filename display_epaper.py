@@ -17,10 +17,10 @@ old partial-refresh scheme on the 2.13" panel.
 
 What this file does:
 - Start the e-paper display in 1-bit (black/white) mode
-- Draw a fixed header and 7 body lines onto a 480x280 image
+- Draw a fixed header and 8 body lines onto a 480x280 image
 - Show that image using fast or full refresh as appropriate
 - Limit how often the screen refreshes
-- Force a refresh when PORT, VLAN, DHCP, or LINK changes
+- Force a refresh when PORT, VLAN, or DHCP changes
 - Manage ghosting by forcing a full refresh every N fast updates
 - Put the display to sleep when appropriate
 
@@ -59,21 +59,22 @@ class EPaperDisplay:
 
     # Text position on the screen.
     LEFT_MARGIN = 14
-    TOP_MARGIN  = 6
+    TOP_MARGIN  = 4
 
     # Number of body lines below the header:
-    # SW / IP / PORT / DESC / VLAN / DHCP / LINK
-    BODY_LINES = 7
+    # SW / MODEL / MAC / IP / PORT / DESC / VLAN / DHCP
+    BODY_LINES = 8
 
-    # Font settings for the body lines. 26px keeps 7 lines within the
-    # 280px panel height (header ~50px + 7 x (26+6) = ~274px).
-    BASE_FONT_SIZE = 26
-    MIN_FONT_SIZE  = 16
-    LINE_SPACING   = 6
+    # Font settings for the body lines. 24px with 5px spacing keeps
+    # 8 lines within the 280px panel height
+    # (header ~44px + 8 x (24+5) = ~276px).
+    BASE_FONT_SIZE = 24
+    MIN_FONT_SIZE  = 14
+    LINE_SPACING   = 5
 
     # Fixed header drawn at the top of every screen.
     TITLE_TEXT       = "PiScout"
-    TITLE_FONT_SIZE  = 30
+    TITLE_FONT_SIZE  = 26
     TITLE_UNDERLINE_GAP = 2
     TITLE_BODY_GAP      = 6
 
@@ -491,21 +492,20 @@ class EPaperDisplay:
 
     def _important_fields_changed(self, new_lines):
         """
-        Check whether PORT (index 2), VLAN (index 4), DHCP (index 5),
-        or LINK (index 6) changed.
+        Check whether PORT (index 4), VLAN (index 6), or DHCP (index 7)
+        changed.
 
-        Line order is SW, IP, PORT, DESC, VLAN, DHCP, LINK. These fields
-        trigger an immediate refresh, bypassing the normal minimum refresh
-        interval, so the technician sees changes right away.
+        Line order is SW, MODEL, MAC, IP, PORT, DESC, VLAN, DHCP. These
+        fields trigger an immediate refresh, bypassing the normal minimum
+        refresh interval, so the technician sees changes right away.
         """
         if self.last_lines is None:
             return True
 
         return (
-            self.last_lines[2] != new_lines[2]
-            or self.last_lines[4] != new_lines[4]
-            or self.last_lines[5] != new_lines[5]
+            self.last_lines[4] != new_lines[4]
             or self.last_lines[6] != new_lines[6]
+            or self.last_lines[7] != new_lines[7]
         )
 
     def _refresh_allowed(self):

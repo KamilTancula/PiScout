@@ -57,6 +57,7 @@ _CDP_TYPE_ADDRESSES   = 0x0002   # Management IP addresses
 _CDP_TYPE_PORT_ID     = 0x0003   # Remote switch port
 _CDP_TYPE_NATIVE_VLAN = 0x000A   # Native/access VLAN
 _CDP_TYPE_VOICE_VLAN  = 0x000E   # VoIP VLAN
+_CDP_TYPE_PLATFORM    = 0x0006   # Hardware platform / model
 
 # CDP address protocol type for IP (NLPID encapsulation).
 _CDP_PROTO_TYPE_NLPID = 0x01
@@ -255,6 +256,33 @@ def _extract_voice_vlan(tlvs: dict[int, list[bytes]]) -> str:
     return ""
 
 
+def _extract_platform(tlvs: dict[int, list[bytes]]) -> str:
+    """
+    Extract the hardware model from the Platform TLV (type 0x0006),
+    a plain ASCII string such as "cisco SG500-52" or "cisco WS-C2960X".
+    """
+    values = tlvs.get(_CDP_TYPE_PLATFORM, [])
+    if not values:
+        return ""
+    platform = _decode_string(values[0]).strip()
+    # Cisco prefixes the vendor name - drop it, the model is what matters.
+    if platform.lower().startswith("cisco "):
+        platform = platform[6:]
+    return platform
+
+
+def _extract_source_mac(frame: bytes) -> str:
+    """
+    Extract the Ethernet source MAC of the CDP frame.
+
+    CDP carries no chassis MAC TLV, but the sender address identifies
+    the transmitting port - on stacks, the physical member unit.
+    """
+    if len(frame) >= 12:
+        return ":".join(f"{b:02X}" for b in frame[6:12])
+    return ""
+
+
 def parse_cdp_frame(frame: bytes) -> dict[str, str]:
     """
     Parse a raw CDP Ethernet frame into a structured neighbor record.
@@ -280,6 +308,8 @@ def parse_cdp_frame(frame: bytes) -> dict[str, str]:
         "switch_ip":   "",
         "port":        "",
         "port_desc":   "",   # CDP carries no port description TLV
+        "switch_mac":  "",
+        "switch_model": "",
         "vlan":        "",
         "voice_vlan":  "",
     }
@@ -297,6 +327,8 @@ def parse_cdp_frame(frame: bytes) -> dict[str, str]:
 
     result["switch_name"] = _extract_device_id(tlvs)
     result["switch_ip"]   = _extract_addresses(tlvs)
+    result["switch_mac"]  = _extract_source_mac(frame)
+    result["switch_model"] = _extract_platform(tlvs)
     result["port"]        = _extract_port_id(tlvs)
     result["vlan"]        = _extract_native_vlan(tlvs)
     result["voice_vlan"]  = _extract_voice_vlan(tlvs)

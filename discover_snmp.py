@@ -78,6 +78,10 @@ if not _SNMP_AVAILABLE:
 # ============================================================
 
 _OID_SYS_NAME            = "1.3.6.1.2.1.1.5.0"
+# SNMPv2-MIB::sysDescr - free-text device description, contains the model.
+_OID_SYS_DESCR           = "1.3.6.1.2.1.1.1.0"
+# BRIDGE-MIB::dot1dBaseBridgeAddress - the chassis (stack) MAC address.
+_OID_BRIDGE_BASE_MAC     = "1.3.6.1.2.1.17.1.1.0"
 _OID_IF_DESCR            = "1.3.6.1.2.1.2.2.1.2"
 # IF-MIB::ifAlias — the operator-configured interface description.
 # Standard MIB, supported identically by Cisco IOS/IOS-XE and Huawei VRP.
@@ -460,6 +464,46 @@ def _snmp_walk(
     return []
 
 
+def _normalize_mac(raw: str) -> str:
+    """
+    Normalize a MAC address string returned by snmpget.
+
+    Depending on the agent and snmpget output options, an octet-string
+    MAC can arrive as "aa:bb:cc:dd:ee:ff", "AA BB CC DD EE FF" or with a
+    "Hex-STRING:" style prefix. Extract exactly six hex pairs and return
+    the canonical "AA:BB:CC:DD:EE:FF" form, or "" if the value does not
+    look like a MAC.
+    """
+    import re
+
+    pairs = re.findall(r"\b([0-9A-Fa-f]{2})\b", str(raw or ""))
+    if len(pairs) < 6:
+        return ""
+    return ":".join(p.upper() for p in pairs[:6])
+
+
+def _get_switch_identity(host: str, community: str) -> dict:
+    """
+    Fetch the switch chassis MAC and model.
+
+    MAC comes from BRIDGE-MIB dot1dBaseBridgeAddress - on stacked
+    switches this is the stack (master) address, which distinguishes
+    whole stacks from each other. The model is taken from the first
+    line of sysDescr; display-side truncation handles the length.
+    """
+    mac_raw = _snmp_get(host, community, _OID_BRIDGE_BASE_MAC)
+    descr   = _snmp_get(host, community, _OID_SYS_DESCR)
+
+    model = ""
+    if descr:
+        model = str(descr).splitlines()[0].strip()
+
+    return {
+        "switch_mac":   _normalize_mac(mac_raw),
+        "switch_model": model,
+    }
+
+
 def _get_port_desc(
     host:      str,
     community: str,
@@ -762,10 +806,14 @@ def _query_switch(
         log.debug("SNMP: port name empty after discovery — discarding result")
         return None
 
+    identity = _get_switch_identity(gateway, community)
+
     result = {
         "protocol":    "SNMP",
         "switch_name": switch_name,
         "switch_ip":   gateway,
+        "switch_mac":  identity["switch_mac"],
+        "switch_model": parse_utils.sanitize_display_string(identity["switch_model"]),
         "port":        port_name,
         "port_desc":   port_desc,
         "vlan":        vlan,

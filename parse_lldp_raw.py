@@ -41,6 +41,7 @@ _TLV_PORT_ID     = 2
 _TLV_TTL         = 3
 _TLV_PORT_DESCR  = 4
 _TLV_SYS_NAME    = 5
+_TLV_SYS_DESCR   = 6
 _TLV_MGMT_ADDR   = 8
 _TLV_ORG_SPEC    = 127
 
@@ -153,6 +154,44 @@ def _extract_chassis_id(tlvs: dict[int, list[bytes]]) -> str:
             return socket.inet_ntoa(addr_bytes)
 
     return _decode_string(data)
+
+
+def _extract_switch_mac(tlvs: dict[int, list[bytes]], frame: bytes) -> str:
+    """
+    Extract the switch MAC address.
+
+    Priority:
+        1. Chassis ID TLV (type 1) with MAC subtype - the chassis/stack
+           address advertised by the switch itself.
+        2. Ethernet source MAC of the frame - the address of the sending
+           port. On stacked switches this identifies the physical member
+           unit, which is useful when all members share one hostname.
+    """
+    values = tlvs.get(_TLV_CHASSIS_ID, [])
+    if values:
+        value = values[0]
+        if len(value) >= 2 and value[0] == _CHASSIS_SUBTYPE_MAC and len(value[1:]) == 6:
+            return ":".join(f"{b:02X}" for b in value[1:])
+
+    if len(frame) >= 12:
+        return ":".join(f"{b:02X}" for b in frame[6:12])
+
+    return ""
+
+
+def _extract_model(tlvs: dict[int, list[bytes]]) -> str:
+    """
+    Extract the switch model from the System Description TLV (type 6).
+
+    The description is free text - e.g. Cisco SG500 sends
+    "SG500-52 52-Port Gigabit Stackable Managed Switch". Only the first
+    line is used; display-side truncation handles the length.
+    """
+    values = tlvs.get(_TLV_SYS_DESCR, [])
+    if not values:
+        return ""
+    descr = _decode_string(values[0])
+    return descr.splitlines()[0].strip() if descr else ""
 
 
 def _extract_system_name(tlvs: dict[int, list[bytes]]) -> str:
@@ -379,6 +418,8 @@ def parse_lldp_frame(frame: bytes) -> dict[str, str]:
         "switch_ip":   "",
         "port":        "",
         "port_desc":   "",
+        "switch_mac":  "",
+        "switch_model": "",
         "vlan":        "",
         "voice_vlan":  "",
     }
@@ -396,6 +437,8 @@ def parse_lldp_frame(frame: bytes) -> dict[str, str]:
 
     result["switch_name"] = _extract_switch_name(tlvs)
     result["switch_ip"]   = _extract_management_ip(tlvs)
+    result["switch_mac"]  = _extract_switch_mac(tlvs, frame)
+    result["switch_model"] = _extract_model(tlvs)
     result["port"]        = _extract_port(tlvs)
     result["port_desc"]   = _extract_port_desc(tlvs, result["port"])
 

@@ -107,30 +107,6 @@ def _truncate(text: str, max_len: int) -> str:
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
-def _format_link_line(interface: str) -> str:
-    """
-    Build the LINK line from live sysfs state.
-
-    Speed is read from /sys/class/net/{iface}/speed (Mbps integer).
-    Duplex is read from /sys/class/net/{iface}/duplex ("full" or "half").
-    Returns e.g. "LINK: 1G FD", "LINK: 100M HD", "LINK: --" if not negotiated.
-    """
-    speed = _read_link_speed(interface)
-    if speed <= 0:
-        return "LINK: --"
-
-    speed_str = f"{speed // 1000}G" if speed >= 1000 else f"{speed}M"
-
-    duplex_path = Path(f"/sys/class/net/{interface}/duplex")
-    try:
-        duplex_raw = duplex_path.read_text(encoding="ascii").strip().lower()
-        duplex_str = "FD" if duplex_raw == "full" else "HD"
-    except Exception:
-        duplex_str = "?"
-
-    return f"LINK: {speed_str} {duplex_str}"
-
-
 def _get_interface_ipv4(interface: str) -> str:
     """
     Read the current IPv4 address of an interface directly from the kernel
@@ -157,6 +133,33 @@ def _get_interface_ipv4(interface: str) -> str:
         return ""
 
 
+def _get_interface_prefix_len(interface: str) -> int:
+    """
+    Read the IPv4 netmask of an interface from the kernel
+    (SIOCGIFNETMASK ioctl) and return it as a prefix length (0-32).
+
+    Returns -1 when the netmask cannot be read.
+    """
+    import fcntl
+    import socket
+    import struct
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            packed = fcntl.ioctl(
+                sock.fileno(),
+                0x891B,  # SIOCGIFNETMASK
+                struct.pack("256s", interface[:15].encode("ascii")),
+            )
+            mask_int = struct.unpack("!I", packed[20:24])[0]
+            return bin(mask_int).count("1")
+        finally:
+            sock.close()
+    except OSError:
+        return -1
+
+
 def _format_dhcp_line(interface: str) -> str:
     """
     Build the DHCP line from the live interface state.
@@ -166,37 +169,49 @@ def _format_dhcp_line(interface: str) -> str:
     link-local fallback assigned when no DHCP server answered, so it
     counts as "no DHCP" for diagnostic purposes.
 
-    Returns e.g. "DHCP: 192.168.1.23" or "DHCP: no".
+    The netmask is appended in prefix notation because the subnet often
+    identifies the network segment (production / office / CCTV) faster
+    than the switch name does.
+
+    Returns e.g. "DHCP: 10.20.30.101/24" or "DHCP: no".
     """
     ip = _get_interface_ipv4(interface)
     if not ip or ip.startswith("169.254."):
         return "DHCP: no"
-    return f"DHCP: {ip}"
+
+    prefix = _get_interface_prefix_len(interface)
+    if prefix < 0:
+        return f"DHCP: {ip}"
+    return f"DHCP: {ip}/{prefix}"
 
 
 def build_display_lines(neighbor: dict, interface: str) -> list[str]:
     """
-    Build the 7 body lines for a valid neighbor result.
+    Build the 8 body lines for a valid neighbor result.
 
     Layout for the 3.7" 480x280 e-paper panel:
-        SW / IP / PORT / DESC / VLAN / DHCP / LINK
+        SW / MODEL / MAC / IP / PORT / DESC / VLAN / DHCP
 
-    The voice VLAN is intentionally not shown — it remains in the
-    result dict and history for debugging, but has no display line.
-    DESC shows the operator-configured port description (LLDP TLV 4
-    or SNMP ifAlias); "--" is shown when no description is configured.
-    DHCP shows the address obtained on eth0, or "no" when no lease
-    was obtained (link-local fallback counts as no lease).
+    Switch identity first (name, model, chassis MAC), then the port,
+    then local state. MODEL and MAC help distinguish stack members and
+    identically named switches. The voice VLAN and link speed are
+    intentionally not shown. DESC shows the operator-configured port
+    description; "--" is shown when a field has no value. DHCP shows
+    the address obtained on eth0 with prefix length, or "no" when no
+    lease was obtained (link-local fallback counts as no lease).
     """
-    port_desc = str(neighbor.get("port_desc", "")).strip()
+    port_desc = str(neighbor.get("port_desc",    "")).strip()
+    model     = str(neighbor.get("switch_model", "")).strip()
+    mac       = str(neighbor.get("switch_mac",   "")).strip()
     return [
         f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 28)}",
+        f"MODEL: {_truncate(model, 26) if model else '--'}",
+        f"MAC: {mac if mac else '--'}",
         f"IP: {_truncate(neighbor.get('switch_ip',   'Unknown'), 28)}",
         f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 26)}",
         f"DESC: {_truncate(port_desc, 30) if port_desc else '--'}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
         _format_dhcp_line(interface),
-        _format_link_line(interface),
     ]
 
 

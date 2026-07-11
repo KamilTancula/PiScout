@@ -117,6 +117,8 @@ def _build_entry(result: dict) -> dict:
         "switch_ip":   result.get("switch_ip",   ""),
         "port":        result.get("port",        ""),
         "port_desc":   result.get("port_desc",   ""),
+        "switch_mac":  result.get("switch_mac",  ""),
+        "switch_model": result.get("switch_model", ""),
         "vlan":        result.get("vlan",        ""),
         "voice_vlan":  result.get("voice_vlan",  ""),
     }
