@@ -41,6 +41,7 @@ import discover_passive
 import discover_snmp
 import history
 import port_aliases
+from parse_utils import shorten_interface_name
 
 # Configure logging before importing display or discovery modules
 # so their loggers inherit the correct level.
@@ -108,6 +109,43 @@ def _create_display():
 def _truncate(text: str, max_len: int) -> str:
     text = str(text).strip()
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _merge_result(prev: Optional[dict], fresh: dict) -> dict:
+    """
+    Fill gaps in a fresh advertisement with data already known for the
+    SAME port.
+
+    Some switches alternate between a full LLDP frame (sent on trigger,
+    with System Description etc.) and a lean periodic one — the SG500's
+    30s frame carries no model, which used to blank the MODEL line on a
+    passive refresh. When the fresh result clearly describes the same
+    switch port, empty fields inherit the previously known values;
+    non-empty fresh fields always win.
+    """
+    if not prev or not isinstance(fresh, dict):
+        return fresh
+
+    same_port = (
+        shorten_interface_name(str(prev.get("port", "")).strip()).lower()
+        == shorten_interface_name(str(fresh.get("port", "")).strip()).lower()
+    )
+    prev_name  = str(prev.get("switch_name", "")).strip().lower()
+    fresh_name = str(fresh.get("switch_name", "")).strip().lower()
+    same_switch = (not prev_name or not fresh_name or prev_name == fresh_name)
+
+    if not same_port or not same_switch:
+        return fresh
+
+    for key in (
+        "switch_name", "switch_ip", "switch_mac", "switch_model",
+        "port_desc", "vlan", "voice_vlan",
+    ):
+        if not str(fresh.get(key, "")).strip() and str(prev.get(key, "")).strip():
+            fresh[key] = prev[key]
+            if key == "port_desc":
+                fresh["port_desc_source"] = prev.get("port_desc_source", "")
+    return fresh
 
 
 def _flush_interface_addresses(interface: str) -> None:
@@ -230,32 +268,41 @@ def _format_dhcp_line(interface: str) -> str:
     identifies the network segment (production / office / CCTV) faster
     than the switch name does.
 
-    Returns e.g. "DHCP: 10.20.30.101/24" or "DHCP: no".
+    Returns e.g. "IP: 10.20.30.101/24" or "IP: no DHCP".
+
+    Note: this is the address of PiScout's OWN eth0 interface — the
+    most useful address for a technician at the socket, since it proves
+    which subnet the port actually serves. The switch management IP
+    (often on an unreachable VLAN) is not shown on screen but remains
+    available as switch_ip in history and JSON snapshots.
     """
     ip = _get_interface_ipv4(interface)
     if not ip or ip.startswith("169.254."):
-        return "DHCP: no"
+        return "IP: no DHCP"
 
     prefix = _get_interface_prefix_len(interface)
     if prefix < 0:
-        return f"DHCP: {ip}"
-    return f"DHCP: {ip}/{prefix}"
+        return f"IP: {ip}"
+    return f"IP: {ip}/{prefix}"
 
 
 def build_display_lines(neighbor: dict, interface: str) -> list[str]:
     """
-    Build the 8 body lines for a valid neighbor result.
+    Build the 7 body lines for a valid neighbor result.
 
     Layout for the 3.7" 480x280 e-paper panel:
-        SW / MODEL / MAC / IP / PORT / DESC / VLAN / DHCP
+        SW / MODEL / MAC / PORT / DESC / VLAN / IP
 
     Switch identity first (name, model, chassis MAC), then the port,
-    then local state. MODEL and MAC help distinguish stack members and
-    identically named switches. The voice VLAN and link speed are
-    intentionally not shown. DESC shows the operator-configured port
-    description; "--" is shown when a field has no value. DHCP shows
-    the address obtained on eth0 with prefix length, or "no" when no
-    lease was obtained (link-local fallback counts as no lease).
+    then local state. The IP line shows the address obtained by eth0
+    from DHCP (with prefix), or "no DHCP" — the switch management IP
+    is intentionally NOT shown (it usually lives on an unreachable
+    management VLAN); it is still stored in history and JSON snapshots.
+
+    Character budgets are generous on purpose: the renderer first tries
+    the base font and automatically steps down to MIN_FONT_SIZE before
+    the text is ever cut, so the "…" ellipsis appears only for extreme
+    lengths.
     """
     port_desc = str(neighbor.get("port_desc",    "")).strip()
     model     = str(neighbor.get("switch_model", "")).strip()
@@ -267,12 +314,11 @@ def build_display_lines(neighbor: dict, interface: str) -> list[str]:
         port_desc = "*" + port_desc
 
     return [
-        f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 28)}",
-        f"MODEL: {_truncate(model, 26) if model else '--'}",
+        f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 34)}",
+        f"MODEL: {_truncate(model, 48) if model else '--'}",
         f"MAC: {mac if mac else '--'}",
-        f"IP: {_truncate(neighbor.get('switch_ip',   'Unknown'), 28)}",
-        f"PORT: {_truncate(neighbor.get('port',       'Unknown'), 26)}",
-        f"DESC: {_truncate(port_desc, 30) if port_desc else '--'}",
+        f"PORT: {_truncate(neighbor.get('port', 'Unknown'), 30)}",
+        f"DESC: {_truncate(port_desc, 48) if port_desc else '--'}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
         _format_dhcp_line(interface),
     ]
@@ -599,6 +645,7 @@ def run() -> None:
                 if not fresh or refresh_cancel.is_set():
                     continue
 
+                fresh = _merge_result(current_result[0], fresh)
                 fresh = port_aliases.apply(fresh)
                 last_success_ts[0] = time.monotonic()
                 log.debug(

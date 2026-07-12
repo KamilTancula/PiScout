@@ -17,7 +17,7 @@ old partial-refresh scheme on the 2.13" panel.
 
 What this file does:
 - Start the e-paper display in 1-bit (black/white) mode
-- Draw a fixed header and 8 body lines onto a 480x280 image
+- Draw a fixed header and 7 body lines onto a 480x280 image
 - Show that image using fast or full refresh as appropriate
 - Limit how often the screen refreshes
 - Force a refresh when PORT, VLAN, or DHCP changes
@@ -62,15 +62,15 @@ class EPaperDisplay:
     TOP_MARGIN  = 4
 
     # Number of body lines below the header:
-    # SW / MODEL / MAC / IP / PORT / DESC / VLAN / DHCP
-    BODY_LINES = 8
+    # SW / MODEL / MAC / PORT / DESC / VLAN / IP
+    BODY_LINES = 7
 
-    # Font settings for the body lines. 24px with 5px spacing keeps
-    # 8 lines within the 280px panel height
-    # (header ~44px + 8 x (24+5) = ~276px).
-    BASE_FONT_SIZE = 24
+    # Font settings for the body lines. 26px with 6px spacing keeps
+    # 7 lines within the 280px panel height
+    # (header ~46px + 7 x (26+6) = ~270px).
+    BASE_FONT_SIZE = 26
     MIN_FONT_SIZE  = 14
-    LINE_SPACING   = 5
+    LINE_SPACING   = 6
 
     # Fixed header drawn at the top of every screen.
     TITLE_TEXT       = "PiScout"
@@ -492,10 +492,10 @@ class EPaperDisplay:
 
     def _important_fields_changed(self, new_lines):
         """
-        Check whether PORT (index 4), VLAN (index 6), or DHCP (index 7)
+        Check whether PORT (index 3), VLAN (index 5), or IP (index 6)
         changed.
 
-        Line order is SW, MODEL, MAC, IP, PORT, DESC, VLAN, DHCP. These
+        Line order is SW, MODEL, MAC, PORT, DESC, VLAN, IP. These
         fields trigger an immediate refresh, bypassing the normal minimum
         refresh interval, so the technician sees changes right away.
         """
@@ -503,9 +503,9 @@ class EPaperDisplay:
             return True
 
         return (
-            self.last_lines[4] != new_lines[4]
+            self.last_lines[3] != new_lines[3]
+            or self.last_lines[5] != new_lines[5]
             or self.last_lines[6] != new_lines[6]
-            or self.last_lines[7] != new_lines[7]
         )
 
     def _refresh_allowed(self):
