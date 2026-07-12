@@ -607,6 +607,50 @@ def _get_port_desc(
     return alias
 
 
+def fetch_port_desc(interface: str, port_name: str) -> str:
+    """
+    One-shot ifAlias fetch AFTER the discovery race has ended.
+
+    Used when CDP/LLDP won the race before the DHCP lease arrived — the
+    SNMP thread had already given up ("no gateway"), so the description
+    was never queried even though the switch is reachable. Once the lease
+    shows up, this fetches just the missing description.
+
+    Resolves the gateway from the given interface's routing table, walks
+    ifDescr to find the ifIndex matching port_name (compared after
+    interface-name shortening, case-insensitive), then reads ifAlias.
+
+    Returns the description or "" (unreachable / port not found / no
+    alias configured). Blocking — call from a background thread.
+    """
+    target = parse_utils.shorten_interface_name(str(port_name or "").strip()).lower()
+    if not target:
+        return ""
+
+    gateway = _read_default_gateway(interface)
+    if not gateway:
+        return ""
+
+    for credential in _get_communities():
+        if not _snmp_get(gateway, credential, _OID_SYS_NAME):
+            continue  # credential/agent not responding — try next (2c mode)
+
+        rows = _snmp_walk(gateway, credential, _OID_IF_DESCR)
+        for oid, value in rows:
+            name = str(value).strip().strip('"')
+            if parse_utils.shorten_interface_name(name).lower() != target:
+                continue
+            try:
+                if_index = int(str(oid).strip().rsplit(".", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            return _get_port_desc(gateway, credential, if_index, port_name)
+
+        return ""  # agent reachable but port not found — stop trying
+
+    return ""
+
+
 # ============================================================
 # Port discovery methods
 # ============================================================

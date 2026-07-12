@@ -43,23 +43,25 @@ def normalize_display_lines(lines, max_lines: int = 6) -> list:
 
 def sanitize_display_string(text: str) -> str:
     """
-    Strip non-printable and non-ASCII characters from a string.
+    Strip non-printable characters from a string while PRESERVING
+    printable Unicode.
 
-    Some switches send TLV values with embedded control characters,
-    vendor-specific encoding, or non-ASCII bytes that render as squares
-    or other garbage on the e-paper display. This function keeps only
-    printable ASCII characters (0x20 through 0x7E).
+    Some switches send TLV values with embedded control characters that
+    render as garbage on the e-paper display — those are removed. Unlike
+    the original ASCII-only version, printable non-ASCII characters
+    (e.g. Polish diacritics in port descriptions: "Łącznik piętro 1")
+    are kept, because the DejaVu display font renders them correctly.
 
     Both parse_lldp_raw and parse_cdp_raw should pass all string values
     through this function before returning them to the caller.
 
     Example:
-        "Gi1/0\\x001" -> "Gi1/0"
-        "switch\\x01.local" -> "switch.local"
+        "Gi1/0\\x001"        -> "Gi1/0"
+        "Łącznik piętro 1"  -> "Łącznik piętro 1"  (unchanged)
     """
     if not text:
         return ""
-    return "".join(c for c in text if 0x20 <= ord(c) <= 0x7E)
+    return "".join(c for c in text if c == " " or c.isprintable())
 
 
 def strip_domain(hostname: str) -> str:

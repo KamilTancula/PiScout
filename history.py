@@ -117,6 +117,7 @@ def _build_entry(result: dict) -> dict:
         "switch_ip":   result.get("switch_ip",   ""),
         "port":        result.get("port",        ""),
         "port_desc":   result.get("port_desc",   ""),
+        "port_desc_source": result.get("port_desc_source", ""),
         "switch_mac":  result.get("switch_mac",  ""),
         "switch_model": result.get("switch_model", ""),
         "vlan":        result.get("vlan",        ""),
@@ -369,7 +370,23 @@ def save_port_snapshot(result: dict, display_lines: Optional[list] = None) -> No
             f.write(content)
         os.replace(tmp_path, path)
 
-        log.debug("Snapshot written: %s", path)
+        # Twin JSON file with the FULL, untruncated result — the .txt
+        # holds display lines (already shortened to fit the screen),
+        # while the .json preserves e.g. the complete switch model
+        # string and the description source for later processing.
+        json_path = path.with_suffix(".json")
+        payload = {
+            "updated":       timestamp,
+            **{k: v for k, v in result.items()},
+            "display_lines": [str(line) for line in display_lines],
+        }
+        tmp_json = json_path.with_suffix(".jtmp")
+        with open(tmp_json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp_json, json_path)
+
+        log.debug("Snapshot written: %s (+ .json)", path)
     except Exception as exc:
         log.warning("History: snapshot write failed: %s", exc)
 

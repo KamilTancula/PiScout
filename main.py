@@ -38,7 +38,9 @@ import config
 import race
 import trigger
 import discover_passive
+import discover_snmp
 import history
+import port_aliases
 
 # Configure logging before importing display or discovery modules
 # so their loggers inherit the correct level.
@@ -258,6 +260,12 @@ def build_display_lines(neighbor: dict, interface: str) -> list[str]:
     port_desc = str(neighbor.get("port_desc",    "")).strip()
     model     = str(neighbor.get("switch_model", "")).strip()
     mac       = str(neighbor.get("switch_mac",   "")).strip()
+
+    # Descriptions from the LOCAL inventory map are prefixed with "*" so
+    # the technician can tell them apart from live device data.
+    if port_desc and neighbor.get("port_desc_source") == "LOCAL":
+        port_desc = "*" + port_desc
+
     return [
         f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 28)}",
         f"MODEL: {_truncate(model, 26) if model else '--'}",
@@ -512,6 +520,9 @@ def run() -> None:
 
         result = result_holder[0]
 
+        if result is not None:
+            result = port_aliases.apply(result)
+
         if not _read_carrier(interface):
             # Link went down while we were waiting — go back to top of loop.
             _flush_interface_addresses(interface)
@@ -588,6 +599,7 @@ def run() -> None:
                 if not fresh or refresh_cancel.is_set():
                     continue
 
+                fresh = port_aliases.apply(fresh)
                 last_success_ts[0] = time.monotonic()
                 log.debug(
                     "Passive refresh | protocol=%s switch=%s port=%s partial=%s",
@@ -635,6 +647,30 @@ def run() -> None:
         # the display without waiting for the next switch advertisement.
         last_dhcp_line = [_format_dhcp_line(interface)]
 
+        # One-shot late description fetch: when a lease arrives after a
+        # CDP/LLDP win, the SNMP thread has already given up — fetch the
+        # missing ifAlias in the background and upgrade the display.
+        desc_fetch_started = [False]
+
+        def _late_desc_fetch():
+            try:
+                best = dict(current_result[0])
+                desc = discover_snmp.fetch_port_desc(interface, best.get("port", ""))
+                if not desc or refresh_cancel.is_set() or shutdown_event.is_set():
+                    return
+                best["port_desc"]        = desc
+                best["port_desc_source"] = "SNMP"
+                current_result[0] = best
+                lines = build_display_lines(best, interface)
+                _show(display, lines, force=True, protocol=best.get("protocol", ""))
+                history.save_port_snapshot(best, lines)
+                log.info(
+                    "Port description fetched via SNMP after late DHCP | desc=%s",
+                    desc,
+                )
+            except Exception as exc:
+                log.debug("Late description fetch failed: %s", exc)
+
         while not shutdown_event.is_set():
             if not _read_carrier(interface):
                 log.info("Link lost on %s", interface)
@@ -657,6 +693,21 @@ def run() -> None:
                     _show(display, lines, force=True, protocol=best.get("protocol", ""))
                     history.save_port_snapshot(best, lines)
                     log.info("DHCP state changed — display updated | %s", new_dhcp)
+
+                    # Lease just arrived and the device gave no description
+                    # (source NONE or LOCAL) — try fetching the real ifAlias.
+                    if (
+                        new_dhcp != "DHCP: no"
+                        and not desc_fetch_started[0]
+                        and bool(getattr(config, "SNMP_ENABLED", False))
+                        and best.get("port_desc_source") in ("NONE", "LOCAL")
+                    ):
+                        desc_fetch_started[0] = True
+                        threading.Thread(
+                            target=_late_desc_fetch,
+                            name="rf-late-desc",
+                            daemon=True,
+                        ).start()
 
             # If result was partial and not yet displayed, check the timer.
             # Show partial data after PARTIAL_DISPLAY_DELAY even if we still

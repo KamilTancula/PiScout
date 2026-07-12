@@ -1,0 +1,18 @@
+{
+  "T085": {
+    "gi1/1/1": "Gniazdo A-101",
+    "gi1/1/2": "Telefon sekretariat",
+    "gi1/1/3": "Stanowisko IT",
+    "gi1/1/4": "Łącznik piętro 1",
+    "gi1/1/5": "Kamera parking",
+    "gi1/1/6": "Rezerwa",
+    "gi2/1/17": "AP piętro 2"
+  },
+  "S5735-K1": {
+    "gi1/0/24": "Uplink do K2",
+    "xgi1/0/1": "Serwerownia A"
+  },
+  "C4:72:95:3C:45:5D": {
+    "gi1/1/5": "Kamera parking (klucz po MAC)"
+  }
+}
