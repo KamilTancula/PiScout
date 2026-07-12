@@ -337,7 +337,10 @@ rm -rf "$WAVESHARE_CLONE_DIR"
 info "Setting file permissions..."
 
 chown -R root:root "$INSTALL_DIR"
-chmod 755 "$INSTALL_DIR/main.py"
+# NOTE: no chmod on main.py — the systemd service runs it via
+# "/usr/bin/python3 main.py", so the executable bit is unnecessary.
+# Changing the mode here also made git report main.py as modified
+# after every install, breaking clean pulls.
 
 info "Permissions set."
 
