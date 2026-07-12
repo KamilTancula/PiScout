@@ -33,7 +33,17 @@ import os
 # community strings. Switches are configured so that ONLY this user
 # can read data; no community brute-forcing is performed in v3 mode.
 #
+# SNMP is DISABLED by default: the device works fully passively
+# (LLDP/CDP capture + local inventory map) and never sends a single
+# SNMP packet. Enable it only on networks where a dedicated read-only
+# SNMPv3 user (e.g. "ITTools") has been provisioned on the switches.
+#
 # SNMP_ENABLED     : master switch for the SNMP discovery thread.
+#                    DISABLED by default — the device works passively
+#                    (LLDP/CDP listen + DHCP + local inventory map) and
+#                    never sends SNMP/SSH/NETCONF/API traffic to any
+#                    switch. Enable only on networks where querying
+#                    switches as the dedicated user is acceptable.
 # SNMP_VERSION     : "3" (default) or "2c" (legacy community mode).
 #
 # SNMPv3 credentials (used when SNMP_VERSION = "3"):
@@ -53,7 +63,7 @@ import os
 #   PS_SNMP_ENABLED=0
 #   PS_SNMP_V3_USER=ITTools PS_SNMP_V3_AUTH_PASS=... PS_SNMP_V3_PRIV_PASS=...
 # ============================================================
-SNMP_ENABLED = os.environ.get("PS_SNMP_ENABLED", "1").lower() in (
+SNMP_ENABLED = os.environ.get("PS_SNMP_ENABLED", "0").lower() in (
     "1", "true", "yes"
 )
 

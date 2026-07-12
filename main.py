@@ -255,30 +255,21 @@ def _get_interface_prefix_len(interface: str) -> int:
         return -1
 
 
-def _format_dhcp_line(interface: str) -> str:
+def _format_ip_line(interface: str) -> str:
     """
-    Build the DHCP line from the live interface state.
+    Build the IP line from the live eth0 state.
 
-    eth0 on this device is always configured for DHCP, so a present
-    address means a lease was obtained. A 169.254.x.x address is the
-    link-local fallback assigned when no DHCP server answered, so it
-    counts as "no DHCP" for diagnostic purposes.
+    Shows the address PiScout's OWN eth0 obtained from DHCP, with the
+    prefix length — the most useful address for a technician at the
+    socket. The switch management IP is intentionally NOT shown (it
+    usually lives on an unreachable management VLAN); it remains stored
+    as switch_ip in history and JSON snapshots.
 
-    The netmask is appended in prefix notation because the subnet often
-    identifies the network segment (production / office / CCTV) faster
-    than the switch name does.
-
-    Returns e.g. "IP: 10.20.30.101/24" or "IP: no DHCP".
-
-    Note: this is the address of PiScout's OWN eth0 interface — the
-    most useful address for a technician at the socket, since it proves
-    which subnet the port actually serves. The switch management IP
-    (often on an unreachable VLAN) is not shown on screen but remains
-    available as switch_ip in history and JSON snapshots.
+    Returns e.g. "IP: 192.168.200.5/28" or "IP: --".
     """
     ip = _get_interface_ipv4(interface)
     if not ip or ip.startswith("169.254."):
-        return "IP: no DHCP"
+        return "IP: --"
 
     prefix = _get_interface_prefix_len(interface)
     if prefix < 0:
@@ -286,23 +277,33 @@ def _format_dhcp_line(interface: str) -> str:
     return f"IP: {ip}/{prefix}"
 
 
+def _format_dhcp_line(interface: str) -> str:
+    """
+    DHCP status: "DHCP: yes" when a lease is held on eth0, "DHCP: no"
+    otherwise (a 169.254.x.x link-local fallback counts as no lease).
+    The address itself is shown on the IP line.
+    """
+    ip = _get_interface_ipv4(interface)
+    if not ip or ip.startswith("169.254."):
+        return "DHCP: no"
+    return "DHCP: yes"
+
+
 def build_display_lines(neighbor: dict, interface: str) -> list[str]:
     """
-    Build the 7 body lines for a valid neighbor result.
+    Build the 8 body lines for a valid neighbor result.
 
-    Layout for the 3.7" 480x280 e-paper panel:
-        SW / MODEL / MAC / PORT / DESC / VLAN / IP
+    Layout for the 3.7" 480x280 e-paper panel, ordered from the most to
+    the least needed information in the field:
+        SW / PORT / VLAN / DESC / IP / DHCP / MAC / MODEL
 
-    Switch identity first (name, model, chassis MAC), then the port,
-    then local state. The IP line shows the address obtained by eth0
-    from DHCP (with prefix), or "no DHCP" — the switch management IP
-    is intentionally NOT shown (it usually lives on an unreachable
-    management VLAN); it is still stored in history and JSON snapshots.
+    IP shows the address obtained by PiScout's own eth0 (with prefix);
+    DHCP is a yes/no lease status. The switch management IP is not
+    displayed (kept as switch_ip in history and JSON snapshots).
 
-    Character budgets are generous on purpose: the renderer first tries
-    the base font and automatically steps down to MIN_FONT_SIZE before
-    the text is ever cut, so the "…" ellipsis appears only for extreme
-    lengths.
+    Character budgets are generous on purpose: the renderer first steps
+    the font down to MIN_FONT_SIZE before text is ever cut, so the "…"
+    ellipsis appears only for extreme lengths.
     """
     port_desc = str(neighbor.get("port_desc",    "")).strip()
     model     = str(neighbor.get("switch_model", "")).strip()
@@ -315,12 +316,13 @@ def build_display_lines(neighbor: dict, interface: str) -> list[str]:
 
     return [
         f"SW: {_truncate(neighbor.get('switch_name', 'Unknown'), 34)}",
-        f"MODEL: {_truncate(model, 48) if model else '--'}",
-        f"MAC: {mac if mac else '--'}",
         f"PORT: {_truncate(neighbor.get('port', 'Unknown'), 30)}",
-        f"DESC: {_truncate(port_desc, 48) if port_desc else '--'}",
         f"VLAN: {neighbor.get('vlan', 'Unknown')}",
+        f"DESC: {_truncate(port_desc, 48) if port_desc else '--'}",
+        _format_ip_line(interface),
         _format_dhcp_line(interface),
+        f"MAC: {mac if mac else '--'}",
+        f"MODEL: {_truncate(model, 48) if model else '--'}",
     ]
 
 
@@ -692,7 +694,7 @@ def run() -> None:
         # Track the DHCP line so a lease that arrives AFTER the result was
         # shown (typical when CDP/LLDP wins before DHCP completes) updates
         # the display without waiting for the next switch advertisement.
-        last_dhcp_line = [_format_dhcp_line(interface)]
+        last_ip_line = [_format_ip_line(interface)]
 
         # One-shot late description fetch: when a lease arrives after a
         # CDP/LLDP win, the SNMP thread has already given up — fetch the
@@ -732,22 +734,22 @@ def run() -> None:
             # A change (lease obtained or lost) re-renders the current
             # result and refreshes the port snapshot file.
             if displayed and not stale_shown:
-                new_dhcp = _format_dhcp_line(interface)
-                if new_dhcp != last_dhcp_line[0]:
-                    last_dhcp_line[0] = new_dhcp
+                new_ip = _format_ip_line(interface)
+                if new_ip != last_ip_line[0]:
+                    last_ip_line[0] = new_ip
                     best = current_result[0]
                     lines = build_display_lines(best, interface)
                     _show(display, lines, force=True, protocol=best.get("protocol", ""))
                     history.save_port_snapshot(best, lines)
-                    log.info("DHCP state changed — display updated | %s", new_dhcp)
+                    log.info("DHCP state changed — display updated | %s", new_ip)
 
                 # A lease is present but the device gave no description
                 # (source NONE or LOCAL) — try fetching the real ifAlias.
-                # Checked every pass, NOT only on a DHCP-line change: with
+                # Checked every pass, NOT only on an IP-line change: with
                 # the link-up DHCP kick the lease often arrives before the
                 # first render, so no "change" event would ever fire.
                 if (
-                    last_dhcp_line[0] != "DHCP: no"
+                    last_ip_line[0] != "IP: --"
                     and not desc_fetch_started[0]
                     and bool(getattr(config, "SNMP_ENABLED", False))
                     and current_result[0].get("port_desc_source") in ("NONE", "LOCAL")
@@ -772,7 +774,7 @@ def run() -> None:
                     lines = build_display_lines(best, interface)
                     _show(display, lines, force=True, protocol=protocol)
                     displayed = True
-                    last_dhcp_line[0] = _format_dhcp_line(interface)
+                    last_ip_line[0] = _format_ip_line(interface)
                     history.record(best)
                     history.save_port_snapshot(best, lines)
                     log.info(
@@ -791,7 +793,7 @@ def run() -> None:
                     lines = build_display_lines(best, interface)
                     _show(display, lines, force=True, protocol=protocol)
                     displayed = True
-                    last_dhcp_line[0] = _format_dhcp_line(interface)
+                    last_ip_line[0] = _format_ip_line(interface)
                     history.record(best)
                     history.save_port_snapshot(best, lines)
                     log.info(
