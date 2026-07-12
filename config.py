@@ -27,6 +27,46 @@ import os
 
 
 # ============================================================
+# ==================== SNMP SETTINGS =========================
+# ============================================================
+# This fork uses SNMPv3 with a dedicated read-only user instead of
+# community strings. Switches are configured so that ONLY this user
+# can read data; no community brute-forcing is performed in v3 mode.
+#
+# SNMP_ENABLED     : master switch for the SNMP discovery thread.
+# SNMP_VERSION     : "3" (default) or "2c" (legacy community mode).
+#
+# SNMPv3 credentials (used when SNMP_VERSION = "3"):
+#   SNMP_V3_USER          : security name (default "ITTools")
+#   SNMP_V3_AUTH_PROTOCOL : "SHA" or "MD5"
+#   SNMP_V3_AUTH_PASSWORD : min 8 characters; empty = noAuthNoPriv
+#   SNMP_V3_PRIV_PROTOCOL : "DES" or "AES"
+#                           (Cisco SG500 CLI provisions DES for priv)
+#   SNMP_V3_PRIV_PASSWORD : min 8 characters; empty = no privacy
+#
+# The security level is derived automatically:
+#   auth + priv password -> authPriv
+#   auth password only   -> authNoPriv
+#   no passwords         -> noAuthNoPriv
+#
+# Override examples:
+#   PS_SNMP_ENABLED=0
+#   PS_SNMP_V3_USER=ITTools PS_SNMP_V3_AUTH_PASS=... PS_SNMP_V3_PRIV_PASS=...
+# ============================================================
+SNMP_ENABLED = os.environ.get("PS_SNMP_ENABLED", "1").lower() in (
+    "1", "true", "yes"
+)
+
+SNMP_VERSION = os.environ.get("PS_SNMP_VERSION", "3").strip()
+
+SNMP_V3_USER          = os.environ.get("PS_SNMP_V3_USER", "ITTools")
+SNMP_V3_AUTH_PROTOCOL = os.environ.get("PS_SNMP_V3_AUTH_PROTO", "SHA")
+SNMP_V3_AUTH_PASSWORD = os.environ.get("PS_SNMP_V3_AUTH_PASS", "")
+SNMP_V3_PRIV_PROTOCOL = os.environ.get("PS_SNMP_V3_PRIV_PROTO", "DES")
+SNMP_V3_PRIV_PASSWORD = os.environ.get("PS_SNMP_V3_PRIV_PASS", "")
+
+
+# ============================================================
 # ================= USER DISPLAY SELECTION ===================
 # ============================================================
 # Valid values:
@@ -78,9 +118,9 @@ RAW_RECEIVE_TIMEOUT = 2.0
 # -------------------- SNMP SETTINGS -------------------------
 # ============================================================
 
-# User-defined SNMP community string.
+# User-defined SNMP community string (LEGACY — used only when
+# SNMP_VERSION = "2c"; ignored entirely in the default v3 mode).
 # If set, this is tried FIRST before the built-in list below.
-# Leave as empty string "" if you do not have a specific string.
 # Override: PS_SNMP_COMMUNITY=mystring
 SNMP_USER_COMMUNITY = os.environ.get("PS_SNMP_COMMUNITY", "")
 

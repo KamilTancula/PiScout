@@ -13,6 +13,12 @@ User=root
 Group=root
 WorkingDirectory=/opt/piscout
 Environment=PYTHONPATH=/opt/piscout
+# Belt-and-suspenders promiscuous mode: the capture socket sets
+# PACKET_MR_PROMISC itself, but raising the flag before start protects
+# the earliest link-up window and makes the state visible in `ip link`.
+# "-" prefix: do not fail service start if the interface is absent.
+ExecStartPre=-/usr/sbin/ip link set dev eth0 up
+ExecStartPre=-/usr/sbin/ip link set dev eth0 promisc on
 ExecStart=/usr/bin/python3 /opt/piscout/main.py
 Restart=on-failure
 RestartSec=3

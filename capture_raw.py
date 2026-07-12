@@ -113,7 +113,27 @@ class RawCapture:
                 socket.htons(_ETH_P_ALL),
             )
             self._sock.bind((self.interface, 0))
-            log.debug("Raw capture socket opened on %s", self.interface)
+
+            # Enable promiscuous mode ON THE SOCKET (PACKET_MR_PROMISC).
+            # This is tied to the socket's lifetime, so it survives
+            # NetworkManager reconfiguring the interface — unlike the
+            # udev/ip-link flag, which NM can silently clear on state
+            # changes. Without promisc, LLDP frames addressed to the
+            # 01:80:C2:00:00:0E multicast group are dropped by the NIC
+            # on some drivers and discovery only ever sees our own
+            # trigger frames.
+            sol_packet     = getattr(socket, "SOL_PACKET", 263)
+            add_membership = getattr(socket, "PACKET_ADD_MEMBERSHIP", 1)
+            mr_promisc     = 1  # PACKET_MR_PROMISC
+            if_index       = socket.if_nametoindex(self.interface)
+            # struct packet_mreq { int ifindex; ushort type; ushort alen; uchar addr[8]; }
+            mreq = struct.pack("@iHH8s", if_index, mr_promisc, 0, b"\x00" * 8)
+            self._sock.setsockopt(sol_packet, add_membership, mreq)
+
+            log.debug(
+                "Raw capture socket opened on %s (promiscuous membership set)",
+                self.interface,
+            )
             return True
 
         except PermissionError:

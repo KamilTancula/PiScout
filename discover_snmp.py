@@ -103,8 +103,64 @@ _OID_LLDP_LOC_PORT_DESC = "1.0.8802.1.1.2.1.3.7.1.4"
 # Configuration helpers
 # ============================================================
 
+def _snmp_v3_mode() -> bool:
+    """True when SNMPv3 user-based security is configured."""
+    return str(getattr(config, "SNMP_VERSION", "3")).strip() == "3"
+
+
+def _snmp_auth_args(credential: str) -> list[str]:
+    """
+    Build the snmpget/snmpwalk authentication arguments.
+
+    In v3 mode the credential parameter is ignored and a single
+    user-based credential set from config is used. The security level
+    is derived from which passwords are present:
+        auth + priv -> authPriv
+        auth only   -> authNoPriv
+        none        -> noAuthNoPriv
+
+    In legacy 2c mode the credential is the community string.
+
+    Passwords are passed on the command line (-A/-X); on this
+    single-user appliance that is acceptable, and nothing here is
+    ever written to logs.
+    """
+    if not _snmp_v3_mode():
+        return ["-v2c", "-c", credential]
+
+    user       = str(getattr(config, "SNMP_V3_USER", "ITTools")).strip()
+    auth_proto = str(getattr(config, "SNMP_V3_AUTH_PROTOCOL", "SHA")).strip()
+    auth_pass  = str(getattr(config, "SNMP_V3_AUTH_PASSWORD", ""))
+    priv_proto = str(getattr(config, "SNMP_V3_PRIV_PROTOCOL", "DES")).strip()
+    priv_pass  = str(getattr(config, "SNMP_V3_PRIV_PASSWORD", ""))
+
+    args = ["-v3", "-u", user]
+
+    if auth_pass and priv_pass:
+        args += ["-l", "authPriv",
+                 "-a", auth_proto, "-A", auth_pass,
+                 "-x", priv_proto, "-X", priv_pass]
+    elif auth_pass:
+        args += ["-l", "authNoPriv",
+                 "-a", auth_proto, "-A", auth_pass]
+    else:
+        args += ["-l", "noAuthNoPriv"]
+
+    return args
+
+
 def _get_communities() -> list[str]:
-    """Build the ordered list of SNMP community strings to try."""
+    """
+    Build the ordered list of SNMP credentials to try.
+
+    v3 mode: a single user-based credential (config SNMP_V3_*) — no
+    guessing, one attempt per query target.
+    2c mode: the user community first, then the built-in list.
+    """
+    if _snmp_v3_mode():
+        user = str(getattr(config, "SNMP_V3_USER", "ITTools")).strip()
+        return [f"snmpv3:{user}"]
+
     built_in = list(getattr(config, "SNMP_COMMUNITY_STRINGS", [
         "public", "cisco", "community", "private",
         "manager", "snmp", "monitor", "readonly",
@@ -325,19 +381,28 @@ def _check_dhcp_option82(interface: str) -> Optional[dict]:
 # Gateway IP discovery
 # ============================================================
 
-def _read_default_gateway() -> Optional[str]:
+def _read_default_gateway(interface: str) -> Optional[str]:
     """
-    Read the default gateway from the kernel routing table.
+    Read the default gateway assigned to a SPECIFIC interface from the
+    kernel routing table.
 
-    Parses /proc/net/route which is updated by dhcpcd when a DHCP lease
-    is obtained. The default route entry has Destination=00000000 and its
-    Gateway field is the IP in little-endian hex.
+    Parses /proc/net/route, where column 0 is the interface name,
+    column 1 the destination and column 2 the gateway (little-endian
+    hex). Only default routes (Destination=00000000) belonging to the
+    given interface are considered.
+
+    Filtering by interface is essential on this device: wlan0 carries
+    its own default route for SSH/Internet, and picking the first
+    default route in the table used to return the Wi-Fi gateway,
+    sending SNMP probes to the wrong network entirely.
     """
     try:
         with open("/proc/net/route", encoding="ascii") as f:
             for line in f.readlines()[1:]:
                 parts = line.strip().split()
                 if len(parts) < 3:
+                    continue
+                if parts[0] != interface:
                     continue
                 if parts[1] == "00000000":
                     gw_int   = int(parts[2], 16)
@@ -351,18 +416,24 @@ def _read_default_gateway() -> Optional[str]:
 
 
 def _wait_for_gateway(
+    interface:    str,
     cancel_event: threading.Event,
     max_wait:     float,
 ) -> Optional[str]:
-    """Poll the routing table until a default gateway appears or timeout."""
+    """Poll the routing table until a default gateway appears on the
+    given interface or the timeout elapses."""
     deadline = time.monotonic() + max_wait
     while not cancel_event.is_set() and time.monotonic() < deadline:
-        gw = _read_default_gateway()
+        gw = _read_default_gateway(interface)
         if gw:
-            log.debug("SNMP: default gateway found: %s", gw)
+            log.debug("SNMP: default gateway on %s: %s", interface, gw)
             return gw
         time.sleep(0.5)
-    log.debug("SNMP: no default gateway appeared within %.1fs", max_wait)
+    log.debug(
+        "SNMP: no default gateway appeared on %s within %.1fs",
+        interface,
+        max_wait,
+    )
     return None
 
 
@@ -389,7 +460,7 @@ def _snmp_get(
         result = subprocess.run(
             [
                 _SNMPGET,
-                "-v2c", "-c", community,
+                *_snmp_auth_args(community),
                 f"-t{t}", "-r1",
                 "-Oqv",         # quiet value-only output
                 host, oid,
@@ -433,7 +504,7 @@ def _snmp_walk(
         result = subprocess.run(
             [
                 _SNMPWALK,
-                "-v2c", "-c", community,
+                *_snmp_auth_args(community),
                 f"-t{t}", "-r0",
                 "-Oqn",         # numeric OIDs, quiet output
                 host, oid,
@@ -866,7 +937,7 @@ def discover(
 
     # Phase 1 — Get a gateway IP to query.
     log.debug("SNMP discovery: waiting for default gateway (DHCP)...")
-    gateway = _wait_for_gateway(cancel_event, max_wait=_dhcp_wait())
+    gateway = _wait_for_gateway(interface, cancel_event, max_wait=_dhcp_wait())
 
     if not gateway and not cancel_event.is_set():
         log.debug("SNMP discovery: DHCP timeout — trying ARP observation")

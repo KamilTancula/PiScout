@@ -200,6 +200,26 @@ touch /etc/cloud/cloud-init.disabled 2>/dev/null || true
 # is exactly what the discovery engine needs.
 info "NetworkManager kept (manages wlan0 for SSH and eth0 via DHCP)."
 
+# Create a dedicated NM profile for eth0 with a HIGH route metric so the
+# default route and DNS stay on WiFi. Without this, plugging eth0 into a
+# test switch hijacks the default route (wired metric 100 beats wifi 600),
+# killing Internet access and DNS over the management WiFi link.
+# ipv4.ignore-auto-dns keeps resolv.conf pointed at the WiFi-provided DNS.
+if command -v nmcli >/dev/null 2>&1; then
+    if nmcli -t -f NAME connection show 2>/dev/null | grep -qx "piscout-eth0"; then
+        info "NetworkManager profile 'piscout-eth0' already exists."
+    else
+        nmcli connection add type ethernet ifname eth0 con-name piscout-eth0 \
+            connection.autoconnect yes connection.autoconnect-priority 100 \
+            ipv4.method auto ipv4.route-metric 700 ipv4.ignore-auto-dns yes \
+            ipv6.method disabled >/dev/null 2>&1 \
+            && info "NM profile 'piscout-eth0' created (route metric 700, DHCP DNS ignored)." \
+            || warn "Could not create NM profile 'piscout-eth0' — check metrics manually."
+    fi
+else
+    warn "nmcli not found — configure eth0 route metric manually if needed."
+fi
+
 # Remove serial console from cmdline.txt — it adds latency on boot
 # since we disabled Bluetooth which shared the UART.
 if [[ -n "$CMDLINE_FILE" ]]; then

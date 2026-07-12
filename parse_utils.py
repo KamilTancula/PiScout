@@ -92,7 +92,10 @@ def shorten_interface_name(port_name: str) -> str:
 
     Note:
         Longer prefixes must appear before shorter ones that share the same
-        start so the correct replacement is applied.
+        start so the correct replacement is applied. Matching is
+        case-insensitive because vendors differ in capitalization —
+        e.g. the Cisco SG500 advertises "gigabitethernet1/1/3" in
+        lowercase, while IOS uses "GigabitEthernet1/0/24".
     """
     if not port_name:
         return ""
@@ -111,9 +114,10 @@ def shorten_interface_name(port_name: str) -> str:
         ("Ethernet",                   "Eth"),
     ]
 
+    lowered = port_name.lower()
     for long_name, short_name in replacements:
-        if port_name.startswith(long_name):
-            return port_name.replace(long_name, short_name, 1)
+        if lowered.startswith(long_name.lower()):
+            return short_name + port_name[len(long_name):]
 
     return port_name
 

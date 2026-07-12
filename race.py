@@ -45,6 +45,7 @@ import queue
 import threading
 from typing import Optional
 
+import config
 import discover_passive
 import discover_snmp
 import trigger
@@ -90,7 +91,12 @@ def run(
     socket_ready = threading.Event()
 
     result_queue: queue.Queue = queue.Queue()
-    num_threads = 2
+
+    # SNMP participates in the race when enabled (default). In v3 mode
+    # it authenticates as a dedicated read-only user (e.g. ITTools) with
+    # a single credential attempt — no community guessing.
+    snmp_enabled = bool(getattr(config, "SNMP_ENABLED", False))
+    num_threads  = 2 if snmp_enabled else 1
 
     def _run_passive() -> None:
         try:
@@ -147,16 +153,24 @@ def run(
     trigger.send_all_triggers(interface, local_mac)
 
     # ---- Step 4: Start persistent CDP burst thread ----
-    # Sends CDP frames every 100ms throughout the entire discovery window.
-    burst_thread = trigger.start_persistent_cdp_burst(interface, internal_stop, src_mac=local_mac)
-
-    # ---- Step 5: Start SNMP thread ----
-    snmp_thread = threading.Thread(
-        target=_run_snmp,
-        name="rf-snmp",
-        daemon=True,
+    # Interval of 1s (was 100ms) still catches switches that need a CDP
+    # nudge, without flooding the port with hundreds of frames while
+    # LLDP — typically on a 10s timer — is doing the real work.
+    burst_thread = trigger.start_persistent_cdp_burst(
+        interface, internal_stop, src_mac=local_mac, interval=1.0
     )
-    snmp_thread.start()
+
+    # ---- Step 5: Start SNMP thread (only when enabled) ----
+    snmp_thread: Optional[threading.Thread] = None
+    if snmp_enabled:
+        snmp_thread = threading.Thread(
+            target=_run_snmp,
+            name="rf-snmp",
+            daemon=True,
+        )
+        snmp_thread.start()
+    else:
+        log.debug("Race: SNMP discovery disabled by config — passive only")
 
     log.debug("Race: all discovery threads running on %s", interface)
 
@@ -191,7 +205,8 @@ def run(
     # ---- Step 7: Clean up all threads ----
     internal_stop.set()
     burst_thread.join(timeout=2.0)
-    snmp_thread.join(timeout=5.0)
+    if snmp_thread is not None:
+        snmp_thread.join(timeout=5.0)
     passive_thread.join(timeout=5.0)
 
     if winner:
