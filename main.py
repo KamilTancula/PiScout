@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -105,6 +106,31 @@ def _create_display():
 def _truncate(text: str, max_len: int) -> str:
     text = str(text).strip()
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _flush_interface_addresses(interface: str) -> None:
+    """
+    Remove all IPv4 addresses from the interface.
+
+    Called on every link-down transition. Without this, NetworkManager
+    can briefly keep the previous DHCP lease on eth0 after the cable is
+    moved to another port, and the DHCP line would then show a stale
+    address from the PREVIOUS port's VLAN — actively misleading for a
+    technician. Flushing guarantees the next port starts from a clean
+    "DHCP: no" state until a fresh lease actually arrives (NM renegotiates
+    DHCP on link-up regardless).
+
+    Failures are logged at debug level and never propagate.
+    """
+    try:
+        subprocess.run(
+            ["ip", "-4", "addr", "flush", "dev", interface],
+            capture_output=True,
+            timeout=3,
+        )
+        log.debug("Flushed IPv4 addresses on %s after link down", interface)
+    except Exception as exc:
+        log.debug("Could not flush addresses on %s: %s", interface, exc)
 
 
 def _get_interface_ipv4(interface: str) -> str:
@@ -435,6 +461,7 @@ def run() -> None:
             if not _read_carrier(interface):
                 log.info("Link lost on %s — cancelling discovery", interface)
                 cancel_event.set()
+                _flush_interface_addresses(interface)
                 break
 
             if not race_thread.is_alive():
@@ -454,6 +481,7 @@ def run() -> None:
 
         if not _read_carrier(interface):
             # Link went down while we were waiting — go back to top of loop.
+            _flush_interface_addresses(interface)
             _show(display, build_waiting_for_link_lines(), force=True)
             continue
 
@@ -569,14 +597,33 @@ def run() -> None:
         )
         refresh_thread.start()
 
+        # Track the DHCP line so a lease that arrives AFTER the result was
+        # shown (typical when CDP/LLDP wins before DHCP completes) updates
+        # the display without waiting for the next switch advertisement.
+        last_dhcp_line = [_format_dhcp_line(interface)]
+
         while not shutdown_event.is_set():
             if not _read_carrier(interface):
                 log.info("Link lost on %s", interface)
                 refresh_cancel.set()
                 refresh_thread.join(timeout=3.0)
+                _flush_interface_addresses(interface)
                 display.set_startup_mode(True)
                 _show(display, build_waiting_for_link_lines(), force=True)
                 break
+
+            # Re-check the live DHCP state once per loop pass (1s cadence).
+            # A change (lease obtained or lost) re-renders the current
+            # result and refreshes the port snapshot file.
+            if displayed and not stale_shown:
+                new_dhcp = _format_dhcp_line(interface)
+                if new_dhcp != last_dhcp_line[0]:
+                    last_dhcp_line[0] = new_dhcp
+                    best = current_result[0]
+                    lines = build_display_lines(best, interface)
+                    _show(display, lines, force=True, protocol=best.get("protocol", ""))
+                    history.save_port_snapshot(best, lines)
+                    log.info("DHCP state changed — display updated | %s", new_dhcp)
 
             # If result was partial and not yet displayed, check the timer.
             # Show partial data after PARTIAL_DISPLAY_DELAY even if we still
@@ -587,9 +634,12 @@ def run() -> None:
                     best = current_result[0]
                     protocol = best.get("protocol", "")
                     display.set_startup_mode(False)
-                    _show(display, build_display_lines(best, interface), force=True, protocol=protocol)
+                    lines = build_display_lines(best, interface)
+                    _show(display, lines, force=True, protocol=protocol)
                     displayed = True
+                    last_dhcp_line[0] = _format_dhcp_line(interface)
                     history.record(best)
+                    history.save_port_snapshot(best, lines)
                     log.info(
                         "Partial result displayed after %.0fs delay | "
                         "switch=%s port=%s vlan=%s",
@@ -603,9 +653,12 @@ def run() -> None:
                     best = current_result[0]
                     protocol = best.get("protocol", "")
                     display.set_startup_mode(False)
-                    _show(display, build_display_lines(best, interface), force=True, protocol=protocol)
+                    lines = build_display_lines(best, interface)
+                    _show(display, lines, force=True, protocol=protocol)
                     displayed = True
+                    last_dhcp_line[0] = _format_dhcp_line(interface)
                     history.record(best)
+                    history.save_port_snapshot(best, lines)
                     log.info(
                         "Complete result arrived during partial wait | "
                         "switch=%s port=%s vlan=%s",
