@@ -58,6 +58,7 @@ _CDP_TYPE_PORT_ID     = 0x0003   # Remote switch port
 _CDP_TYPE_NATIVE_VLAN = 0x000A   # Native/access VLAN
 _CDP_TYPE_VOICE_VLAN  = 0x000E   # VoIP VLAN
 _CDP_TYPE_PLATFORM    = 0x0006   # Hardware platform / model
+_CDP_TYPE_SYS_NAME    = 0x0014   # System Name (hostname, newer switches)
 
 # CDP address protocol type for IP (NLPID encapsulation).
 _CDP_PROTO_TYPE_NLPID = 0x01
@@ -118,16 +119,38 @@ def _decode_string(value: bytes) -> str:
 
 def _extract_device_id(tlvs: dict[int, list[bytes]]) -> str:
     """
-    Extract the Device ID TLV — the switch hostname.
+    Extract the switch name.
 
-    CDP Device ID (type 0x0001) is a plain ASCII string containing
-    the switch's configured hostname. Domain suffix is stripped.
+    Priority:
+        1. System Name TLV (0x0014) — the configured hostname; sent by
+           newer switches (SG500 includes it even though its Device ID
+           is a raw MAC).
+        2. Device ID TLV (0x0001) — the classic identifier. Some
+           platforms (Cisco SG500) send the chassis MAC here as a bare
+           12-char hex string ("c472953c455d"); such values are
+           reformatted to standard MAC notation for readability.
     """
+    sys_values = tlvs.get(_CDP_TYPE_SYS_NAME, [])
+    if sys_values:
+        name = strip_domain(_decode_string(sys_values[0]))
+        if name:
+            return name
+
     values = tlvs.get(_CDP_TYPE_DEVICE_ID, [])
     if not values:
         return ""
 
-    return strip_domain(_decode_string(values[0]))
+    device_id = strip_domain(_decode_string(values[0]))
+
+    # A bare 12-hex-char Device ID is a MAC address, not a hostname —
+    # reformat it so the display shows "C4:72:95:3C:45:5D".
+    candidate = device_id.strip()
+    if len(candidate) == 12 and all(c in "0123456789abcdefABCDEF" for c in candidate):
+        return ":".join(
+            candidate[i:i + 2].upper() for i in range(0, 12, 2)
+        )
+
+    return device_id
 
 
 def _extract_addresses(tlvs: dict[int, list[bytes]]) -> str:

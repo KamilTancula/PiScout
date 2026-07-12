@@ -488,9 +488,11 @@ def run() -> None:
             if not shutdown_event.is_set():
                 protocol = result.get("protocol", "")
                 display.set_startup_mode(False)
-                _show(display, build_display_lines(result, interface), force=True, protocol=protocol)
+                lines = build_display_lines(result, interface)
+                _show(display, lines, force=True, protocol=protocol)
                 displayed = True
                 history.record(result)
+                history.save_port_snapshot(result, lines)
                 log.info(
                     "Display updated | protocol=%s switch=%s ip=%s port=%s desc=%s vlan=%s",
                     protocol,
@@ -540,14 +542,16 @@ def run() -> None:
 
                 if is_upgrade or data_changed:
                     current_result[0] = fresh
+                    lines = build_display_lines(fresh, interface)
                     _show(
                         display,
-                        build_display_lines(fresh, interface),
+                        lines,
                         force=True,
                         protocol=fresh.get("protocol", ""),
                     )
                     if is_upgrade:
                         history.record(fresh)
+                    history.save_port_snapshot(fresh, lines)
                     log.info(
                         "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
                         "upgraded from partial" if is_upgrade else "refreshed",

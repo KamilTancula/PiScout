@@ -265,10 +265,128 @@ def _record_debug_log(result: dict, history_dir: Path) -> None:
 
 
 # ============================================================
+# Per-port snapshot files
+# ============================================================
+
+def _safe_filename_part(text: str, fallback: str) -> str:
+    """
+    Turn a switch/port name into a filesystem-safe filename fragment.
+    Keeps letters, digits, dots and dashes; everything else becomes "-".
+    """
+    text = str(text or "").strip()
+    if not text:
+        return fallback
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in ".-") else "-" for ch in text
+    )
+    return cleaned.strip("-") or fallback
+
+
+def _save_port_snapshot(result: dict, display_lines: list, history_dir: Path) -> None:
+    """
+    Write a human-readable snapshot of what the display shows for this
+    port to PORT_HISTORY_PATH/ports/<switch>_<port>.txt.
+
+    One file per (switch, port) pair, ALWAYS overwritten — each file
+    holds exactly one entry: the most recent state of that port. This
+    gives a readable per-port record when walking through ports during
+    testing or documentation.
+    """
+    ports_dir = history_dir / "ports"
+    if not _ensure_dir(ports_dir):
+        return
+
+    switch_part = _safe_filename_part(result.get("switch_name", ""), "unknown-switch")
+    port_part   = _safe_filename_part(result.get("port", ""),        "unknown-port")
+    snapshot    = ports_dir / f"{switch_part}_{port_part}.txt"
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    body_lines = [str(line) for line in (display_lines or []) if str(line).strip()]
+
+    content = (
+        "PiScout port snapshot\n"
+        f"Updated:  {timestamp}\n"
+        f"Protocol: {result.get('protocol', '')}\n"
+        "\n"
+        + "\n".join(body_lines)
+        + "\n"
+    )
+
+    try:
+        snapshot.write_text(content, encoding="utf-8")
+        log.debug("History: port snapshot written to %s", snapshot)
+    except OSError as exc:
+        log.warning("History: could not write port snapshot %s: %s", snapshot, exc)
+
+
+# ============================================================
 # Public entry point
 # ============================================================
 
-def record(result: dict) -> None:
+def save_port_snapshot(result: dict, display_lines: Optional[list] = None) -> None:
+    """
+    Write a human-readable snapshot file for a single switch port.
+
+    One file per (switch, port) pair under PORT_HISTORY_PATH/ports/,
+    e.g. "t085_gi1-1-3.txt". The file always contains exactly ONE
+    entry — the latest display content for that port — and is
+    overwritten on every new discovery, so it stays readable at a
+    glance. Useful for walking a switch port-by-port and reviewing
+    the collected results afterwards.
+
+    Enabled whenever PORT_HISTORY_MODE >= 1 (same gate as history).
+    Failures are logged but never propagate — a snapshot write error
+    must never affect discovery or display behavior.
+    """
+    try:
+        if _get_mode() == 0 or not display_lines:
+            return
+
+        ports_dir = Path(_get_path()) / "ports"
+        if not _ensure_dir(ports_dir):
+            return
+
+        switch = _safe_filename(result.get("switch_name") or "unknown-switch")
+        port   = _safe_filename(result.get("port")        or "unknown-port")
+        path   = ports_dir / f"{switch}_{port}.txt".lower()
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        protocol  = str(result.get("protocol", "")).strip() or "?"
+
+        body = "\n".join(str(line) for line in display_lines)
+        content = (
+            "# PiScout port snapshot — latest result for this port\n"
+            f"# Updated : {timestamp}\n"
+            f"# Protocol: {protocol}\n"
+            "\n"
+            f"{body}\n"
+        )
+
+        # Atomic write: never leave a half-written file behind if power
+        # is cut mid-write (this device is unplugged without warning).
+        tmp_path = path.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, path)
+
+        log.debug("Snapshot written: %s", path)
+    except Exception as exc:
+        log.warning("History: snapshot write failed: %s", exc)
+
+
+def _safe_filename(name: str) -> str:
+    """
+    Make a string safe for use as a filename: keep letters, digits,
+    dot, dash and underscore; replace everything else (slashes in
+    port names, spaces, colons in MACs) with a dash.
+    """
+    cleaned = "".join(
+        c if (c.isalnum() or c in "._-") else "-" for c in str(name).strip()
+    )
+    return cleaned.strip("-") or "unknown"
+
+
+def record(result: dict, display_lines: Optional[list] = None) -> None:
     """
     Record a discovery result according to PORT_HISTORY_MODE.
 
