@@ -694,20 +694,24 @@ def run() -> None:
                     history.save_port_snapshot(best, lines)
                     log.info("DHCP state changed — display updated | %s", new_dhcp)
 
-                    # Lease just arrived and the device gave no description
-                    # (source NONE or LOCAL) — try fetching the real ifAlias.
-                    if (
-                        new_dhcp != "DHCP: no"
-                        and not desc_fetch_started[0]
-                        and bool(getattr(config, "SNMP_ENABLED", False))
-                        and best.get("port_desc_source") in ("NONE", "LOCAL")
-                    ):
-                        desc_fetch_started[0] = True
-                        threading.Thread(
-                            target=_late_desc_fetch,
-                            name="rf-late-desc",
-                            daemon=True,
-                        ).start()
+                # A lease is present but the device gave no description
+                # (source NONE or LOCAL) — try fetching the real ifAlias.
+                # Checked every pass, NOT only on a DHCP-line change: with
+                # the link-up DHCP kick the lease often arrives before the
+                # first render, so no "change" event would ever fire.
+                if (
+                    last_dhcp_line[0] != "DHCP: no"
+                    and not desc_fetch_started[0]
+                    and bool(getattr(config, "SNMP_ENABLED", False))
+                    and current_result[0].get("port_desc_source") in ("NONE", "LOCAL")
+                    and current_result[0].get("port")
+                ):
+                    desc_fetch_started[0] = True
+                    threading.Thread(
+                        target=_late_desc_fetch,
+                        name="rf-late-desc",
+                        daemon=True,
+                    ).start()
 
             # If result was partial and not yet displayed, check the timer.
             # Show partial data after PARTIAL_DISPLAY_DELAY even if we still
