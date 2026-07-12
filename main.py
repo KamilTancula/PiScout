@@ -133,6 +133,35 @@ def _flush_interface_addresses(interface: str) -> None:
         log.debug("Could not flush addresses on %s: %s", interface, exc)
 
 
+def _kick_fresh_dhcp(interface: str) -> None:
+    """
+    Force a fresh DHCP transaction at link-up.
+
+    Why this exists: when the cable is moved quickly between switch
+    ports, NetworkManager treats the short carrier loss as a link flap
+    and keeps the connection active — after carrier returns it silently
+    RE-APPLIES the cached lease from the PREVIOUS port's VLAN. Our
+    link-down address flush gets undone by NM, and the display shows a
+    ghost address until the DHCP server on the new VLAN NAKs the stale
+    lease seconds later.
+
+    Reactivating the dedicated profile ("nmcli connection up") tears the
+    assumed state down immediately and starts a clean DHCP negotiation
+    on the new port. Fire-and-forget with -w 0: if NM is already mid-
+    activation the command fails harmlessly and NM continues on its own.
+    Errors (nmcli absent, profile missing) are ignored by design.
+    """
+    try:
+        subprocess.Popen(
+            ["nmcli", "-w", "0", "connection", "up", "piscout-eth0"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log.debug("Requested fresh DHCP via NM profile reactivation (%s)", interface)
+    except Exception as exc:
+        log.debug("Could not reactivate NM profile: %s", exc)
+
+
 def _get_interface_ipv4(interface: str) -> str:
     """
     Read the current IPv4 address of an interface directly from the kernel
@@ -399,6 +428,10 @@ def run() -> None:
 
         # ---- Link is up — start a discovery session ----
         log.info("Link up on %s — starting discovery", interface)
+
+        # Defeat NM's link-flap grace: without this, a quick cable move
+        # re-applies the previous port's cached lease (see helper docs).
+        _kick_fresh_dhcp(interface)
 
         # Wait for auto-negotiation to complete before transmitting.
         # During the 1-3 second negotiation window no frames can be sent
