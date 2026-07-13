@@ -6,7 +6,7 @@ Passive LLDP and CDP neighbor discovery via raw Ethernet frame capture.
 Listens on a raw AF_PACKET socket for LLDP and CDP frames broadcast by the
 connected switch. Returns the first valid result as a normalized neighbor dict.
 
-This is the fallback discovery path used when SNMP is unavailable or slow.
+This is the sole discovery path: PiScout listens passively for LLDP and CDP frames.
 On LLDP-capable switches it typically returns results in 3-8 seconds.
 On CDP-only Cisco switches it may take 20-60 seconds depending on where
 the switch is in its advertisement cycle.
@@ -22,7 +22,6 @@ What this file does NOT do:
 - Send trigger frames (race.py calls trigger.send_all_triggers before starting threads)
 - Talk to the display
 - Manage session state
-- Call SNMP or perform any active network queries
 """
 
 from __future__ import annotations

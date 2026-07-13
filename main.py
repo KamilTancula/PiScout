@@ -6,7 +6,7 @@ PiScout — entry point and main loop.
 Monitors Ethernet carrier state, runs the discovery race on link-up,
 and updates the e-paper display with switch port information.
 
-Discovery is handled entirely by race.py, which runs SNMP and passive
+Discovery is handled entirely by race.py, which runs passive
 LLDP/CDP capture in parallel and returns the fastest result.
 
 What this file does:
@@ -19,7 +19,6 @@ What this file does:
 What this file does NOT do:
 - Implement any discovery logic (that belongs in discover_*.py and race.py)
 - Parse LLDP or CDP frames directly
-- Query SNMP directly
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ import config
 import race
 import trigger
 import discover_passive
-import discover_snmp
 import history
 import port_aliases
 from parse_utils import shorten_interface_name
@@ -696,29 +694,455 @@ def run() -> None:
         # the display without waiting for the next switch advertisement.
         last_ip_line = [_format_ip_line(interface)]
 
-        # One-shot late description fetch: when a lease arrives after a
-        # CDP/LLDP win, the SNMP thread has already given up — fetch the
-        # missing ifAlias in the background and upgrade the display.
-        desc_fetch_started = [False]
+        while not shutdown_event.is_set():
+            if not _read_carrier(interface):
+                log.info("Link lost on %s — cancelling discovery", interface)
+                cancel_event.set()
+                _flush_interface_addresses(interface)
+                break
 
-        def _late_desc_fetch():
-            try:
-                best = dict(current_result[0])
-                desc = discover_snmp.fetch_port_desc(interface, best.get("port", ""))
-                if not desc or refresh_cancel.is_set() or shutdown_event.is_set():
-                    return
-                best["port_desc"]        = desc
-                best["port_desc_source"] = "SNMP"
-                current_result[0] = best
-                lines = build_display_lines(best, interface)
-                _show(display, lines, force=True, protocol=best.get("protocol", ""))
-                history.save_port_snapshot(best, lines)
+            if not race_thread.is_alive():
+                break  # Race finished
+
+            _wait_or_shutdown(shutdown_event, 0.5)
+
+        # Wait for the race thread to finish (it will exit quickly once
+        # cancel_event is set or when it completes naturally).
+        race_thread.join(timeout=5.0)
+        cancel_event.set()  # Ensure all threads stop
+
+        if shutdown_event.is_set():
+            break
+
+        result = result_holder[0]
+
+        if result is not None:
+            result = port_aliases.apply(result)
+
+        if not _read_carrier(interface):
+            # Link went down while we were waiting — go back to top of loop.
+            _flush_interface_addresses(interface)
+            _show(display, build_waiting_for_link_lines(), force=True)
+            continue
+
+        if result is None:
+            # Discovery timed out with link still up.
+            log.info("Discovery timed out on %s", interface)
+            _show(display, build_stale_lines(), force=True)
+            # Stay on stale screen until link drops.
+            while _read_carrier(interface) and not shutdown_event.is_set():
+                _wait_or_shutdown(shutdown_event, 1.0)
+            continue
+
+        # ---- We have a result (may be partial) ----
+        is_partial   = result.get("is_partial", False)
+        result_at    = time.monotonic()
+        displayed    = False
+
+        if is_partial:
+            log.info(
+                "Partial result from race | protocol=%s switch=%s port=%s vlan=%s",
+                result.get("protocol"),
+                result.get("switch_name"),
+                result.get("port"),
+                result.get("vlan"),
+            )
+        else:
+            # Complete result — enforce normal reveal delay then show immediately.
+            elapsed = time.monotonic() - scan_drawn_at
+            if elapsed < reveal_delay:
+                _wait_or_shutdown(shutdown_event, reveal_delay - elapsed)
+
+            if not shutdown_event.is_set():
+                protocol = result.get("protocol", "")
+                display.set_startup_mode(False)
+                lines = build_display_lines(result, interface)
+                _show(display, lines, force=True, protocol=protocol)
+                displayed = True
+                history.record(result)
+                history.save_port_snapshot(result, lines)
                 log.info(
-                    "Port description fetched via SNMP after late DHCP | desc=%s",
-                    desc,
+                    "Display updated | protocol=%s switch=%s ip=%s port=%s desc=%s vlan=%s",
+                    protocol,
+                    result.get("switch_name"),
+                    result.get("switch_ip"),
+                    result.get("port"),
+                    result.get("port_desc"),
+                    result.get("vlan"),
                 )
-            except Exception as exc:
-                log.debug("Late description fetch failed: %s", exc)
+
+        if shutdown_event.is_set():
+            break
+
+        # ---- Monitor link while showing result ----
+        # Background passive listener serves three purposes:
+        # 1. Resets the stale timer on every switch re-advertisement
+        # 2. Upgrades display from partial to complete when more data arrives
+        # 3. Updates display if switch data changes (e.g. VLAN reassignment)
+        refresh_cancel  = threading.Event()
+        last_success_ts = [time.monotonic()]
+        current_result  = [result]
+        stale_shown     = False
+
+        def _passive_refresh():
+            while not shutdown_event.is_set() and not refresh_cancel.is_set():
+                fresh = discover_passive.discover(
+                    interface=interface,
+                    local_mac=local_mac,
+                    cancel_event=refresh_cancel,
+                    timeout=disc_timeout,
+                )
+                if not fresh or refresh_cancel.is_set():
+                    continue
+
+                fresh = _merge_result(current_result[0], fresh)
+                fresh = port_aliases.apply(fresh)
+                last_success_ts[0] = time.monotonic()
+                log.debug(
+                    "Passive refresh | protocol=%s switch=%s port=%s partial=%s",
+                    fresh.get("protocol"),
+                    fresh.get("switch_name"),
+                    fresh.get("port"),
+                    fresh.get("is_partial"),
+                )
+
+                prev = current_result[0]
+                is_upgrade = prev.get("is_partial") and not fresh.get("is_partial")
+                data_changed = fresh != prev
+
+                if is_upgrade or data_changed:
+                    current_result[0] = fresh
+                    lines = build_display_lines(fresh, interface)
+                    _show(
+                        display,
+                        lines,
+                        force=True,
+                        protocol=fresh.get("protocol", ""),
+                    )
+                    if is_upgrade:
+                        history.record(fresh)
+                    history.save_port_snapshot(fresh, lines)
+                    log.info(
+                        "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
+                        "upgraded from partial" if is_upgrade else "refreshed",
+                        fresh.get("protocol"),
+                        fresh.get("switch_name"),
+                        fresh.get("port"),
+                        fresh.get("port_desc"),
+                        fresh.get("vlan"),
+                    )
+
+        refresh_thread = threading.Thread(
+            target=_passive_refresh,
+            name="rf-passive-refresh",
+            daemon=True,
+        )
+        refresh_thread.start()
+
+        # Track the DHCP line so a lease that arrives AFTER the result was
+        # shown (typical when CDP/LLDP wins before DHCP completes) updates
+        # the display without waiting for the next switch advertisement.
+        last_ip_line = [_format_ip_line(interface)]
+
+        while not shutdown_event.is_set():
+            if not _read_carrier(interface):
+                log.info("Link lost on %s — cancelling discovery", interface)
+                cancel_event.set()
+                _flush_interface_addresses(interface)
+                break
+
+            if not race_thread.is_alive():
+                break  # Race finished
+
+            _wait_or_shutdown(shutdown_event, 0.5)
+
+        # Wait for the race thread to finish (it will exit quickly once
+        # cancel_event is set or when it completes naturally).
+        race_thread.join(timeout=5.0)
+        cancel_event.set()  # Ensure all threads stop
+
+        if shutdown_event.is_set():
+            break
+
+        result = result_holder[0]
+
+        if result is not None:
+            result = port_aliases.apply(result)
+
+        if not _read_carrier(interface):
+            # Link went down while we were waiting — go back to top of loop.
+            _flush_interface_addresses(interface)
+            _show(display, build_waiting_for_link_lines(), force=True)
+            continue
+
+        if result is None:
+            # Discovery timed out with link still up.
+            log.info("Discovery timed out on %s", interface)
+            _show(display, build_stale_lines(), force=True)
+            # Stay on stale screen until link drops.
+            while _read_carrier(interface) and not shutdown_event.is_set():
+                _wait_or_shutdown(shutdown_event, 1.0)
+            continue
+
+        # ---- We have a result (may be partial) ----
+        is_partial   = result.get("is_partial", False)
+        result_at    = time.monotonic()
+        displayed    = False
+
+        if is_partial:
+            log.info(
+                "Partial result from race | protocol=%s switch=%s port=%s vlan=%s",
+                result.get("protocol"),
+                result.get("switch_name"),
+                result.get("port"),
+                result.get("vlan"),
+            )
+        else:
+            # Complete result — enforce normal reveal delay then show immediately.
+            elapsed = time.monotonic() - scan_drawn_at
+            if elapsed < reveal_delay:
+                _wait_or_shutdown(shutdown_event, reveal_delay - elapsed)
+
+            if not shutdown_event.is_set():
+                protocol = result.get("protocol", "")
+                display.set_startup_mode(False)
+                lines = build_display_lines(result, interface)
+                _show(display, lines, force=True, protocol=protocol)
+                displayed = True
+                history.record(result)
+                history.save_port_snapshot(result, lines)
+                log.info(
+                    "Display updated | protocol=%s switch=%s ip=%s port=%s desc=%s vlan=%s",
+                    protocol,
+                    result.get("switch_name"),
+                    result.get("switch_ip"),
+                    result.get("port"),
+                    result.get("port_desc"),
+                    result.get("vlan"),
+                )
+
+        if shutdown_event.is_set():
+            break
+
+        # ---- Monitor link while showing result ----
+        # Background passive listener serves three purposes:
+        # 1. Resets the stale timer on every switch re-advertisement
+        # 2. Upgrades display from partial to complete when more data arrives
+        # 3. Updates display if switch data changes (e.g. VLAN reassignment)
+        refresh_cancel  = threading.Event()
+        last_success_ts = [time.monotonic()]
+        current_result  = [result]
+        stale_shown     = False
+
+        def _passive_refresh():
+            while not shutdown_event.is_set() and not refresh_cancel.is_set():
+                fresh = discover_passive.discover(
+                    interface=interface,
+                    local_mac=local_mac,
+                    cancel_event=refresh_cancel,
+                    timeout=disc_timeout,
+                )
+                if not fresh or refresh_cancel.is_set():
+                    continue
+
+                fresh = _merge_result(current_result[0], fresh)
+                fresh = port_aliases.apply(fresh)
+                last_success_ts[0] = time.monotonic()
+                log.debug(
+                    "Passive refresh | protocol=%s switch=%s port=%s partial=%s",
+                    fresh.get("protocol"),
+                    fresh.get("switch_name"),
+                    fresh.get("port"),
+                    fresh.get("is_partial"),
+                )
+
+                prev = current_result[0]
+                is_upgrade = prev.get("is_partial") and not fresh.get("is_partial")
+                data_changed = fresh != prev
+
+                if is_upgrade or data_changed:
+                    current_result[0] = fresh
+                    lines = build_display_lines(fresh, interface)
+                    _show(
+                        display,
+                        lines,
+                        force=True,
+                        protocol=fresh.get("protocol", ""),
+                    )
+                    if is_upgrade:
+                        history.record(fresh)
+                    history.save_port_snapshot(fresh, lines)
+                    log.info(
+                        "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
+                        "upgraded from partial" if is_upgrade else "refreshed",
+                        fresh.get("protocol"),
+                        fresh.get("switch_name"),
+                        fresh.get("port"),
+                        fresh.get("port_desc"),
+                        fresh.get("vlan"),
+                    )
+
+        refresh_thread = threading.Thread(
+            target=_passive_refresh,
+            name="rf-passive-refresh",
+            daemon=True,
+        )
+        refresh_thread.start()
+
+        # Track the DHCP line so a lease that arrives AFTER the result was
+        # shown (typical when CDP/LLDP wins before DHCP completes) updates
+        # the display without waiting for the next switch advertisement.
+        last_ip_line = [_format_ip_line(interface)]
+
+        while not shutdown_event.is_set():
+            if not _read_carrier(interface):
+                log.info("Link lost on %s — cancelling discovery", interface)
+                cancel_event.set()
+                _flush_interface_addresses(interface)
+                break
+
+            if not race_thread.is_alive():
+                break  # Race finished
+
+            _wait_or_shutdown(shutdown_event, 0.5)
+
+        # Wait for the race thread to finish (it will exit quickly once
+        # cancel_event is set or when it completes naturally).
+        race_thread.join(timeout=5.0)
+        cancel_event.set()  # Ensure all threads stop
+
+        if shutdown_event.is_set():
+            break
+
+        result = result_holder[0]
+
+        if result is not None:
+            result = port_aliases.apply(result)
+
+        if not _read_carrier(interface):
+            # Link went down while we were waiting — go back to top of loop.
+            _flush_interface_addresses(interface)
+            _show(display, build_waiting_for_link_lines(), force=True)
+            continue
+
+        if result is None:
+            # Discovery timed out with link still up.
+            log.info("Discovery timed out on %s", interface)
+            _show(display, build_stale_lines(), force=True)
+            # Stay on stale screen until link drops.
+            while _read_carrier(interface) and not shutdown_event.is_set():
+                _wait_or_shutdown(shutdown_event, 1.0)
+            continue
+
+        # ---- We have a result (may be partial) ----
+        is_partial   = result.get("is_partial", False)
+        result_at    = time.monotonic()
+        displayed    = False
+
+        if is_partial:
+            log.info(
+                "Partial result from race | protocol=%s switch=%s port=%s vlan=%s",
+                result.get("protocol"),
+                result.get("switch_name"),
+                result.get("port"),
+                result.get("vlan"),
+            )
+        else:
+            # Complete result — enforce normal reveal delay then show immediately.
+            elapsed = time.monotonic() - scan_drawn_at
+            if elapsed < reveal_delay:
+                _wait_or_shutdown(shutdown_event, reveal_delay - elapsed)
+
+            if not shutdown_event.is_set():
+                protocol = result.get("protocol", "")
+                display.set_startup_mode(False)
+                lines = build_display_lines(result, interface)
+                _show(display, lines, force=True, protocol=protocol)
+                displayed = True
+                history.record(result)
+                history.save_port_snapshot(result, lines)
+                log.info(
+                    "Display updated | protocol=%s switch=%s ip=%s port=%s desc=%s vlan=%s",
+                    protocol,
+                    result.get("switch_name"),
+                    result.get("switch_ip"),
+                    result.get("port"),
+                    result.get("port_desc"),
+                    result.get("vlan"),
+                )
+
+        if shutdown_event.is_set():
+            break
+
+        # ---- Monitor link while showing result ----
+        # Background passive listener serves three purposes:
+        # 1. Resets the stale timer on every switch re-advertisement
+        # 2. Upgrades display from partial to complete when more data arrives
+        # 3. Updates display if switch data changes (e.g. VLAN reassignment)
+        refresh_cancel  = threading.Event()
+        last_success_ts = [time.monotonic()]
+        current_result  = [result]
+        stale_shown     = False
+
+        def _passive_refresh():
+            while not shutdown_event.is_set() and not refresh_cancel.is_set():
+                fresh = discover_passive.discover(
+                    interface=interface,
+                    local_mac=local_mac,
+                    cancel_event=refresh_cancel,
+                    timeout=disc_timeout,
+                )
+                if not fresh or refresh_cancel.is_set():
+                    continue
+
+                fresh = _merge_result(current_result[0], fresh)
+                fresh = port_aliases.apply(fresh)
+                last_success_ts[0] = time.monotonic()
+                log.debug(
+                    "Passive refresh | protocol=%s switch=%s port=%s partial=%s",
+                    fresh.get("protocol"),
+                    fresh.get("switch_name"),
+                    fresh.get("port"),
+                    fresh.get("is_partial"),
+                )
+
+                prev = current_result[0]
+                is_upgrade = prev.get("is_partial") and not fresh.get("is_partial")
+                data_changed = fresh != prev
+
+                if is_upgrade or data_changed:
+                    current_result[0] = fresh
+                    lines = build_display_lines(fresh, interface)
+                    _show(
+                        display,
+                        lines,
+                        force=True,
+                        protocol=fresh.get("protocol", ""),
+                    )
+                    if is_upgrade:
+                        history.record(fresh)
+                    history.save_port_snapshot(fresh, lines)
+                    log.info(
+                        "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
+                        "upgraded from partial" if is_upgrade else "refreshed",
+                        fresh.get("protocol"),
+                        fresh.get("switch_name"),
+                        fresh.get("port"),
+                        fresh.get("port_desc"),
+                        fresh.get("vlan"),
+                    )
+
+        refresh_thread = threading.Thread(
+            target=_passive_refresh,
+            name="rf-passive-refresh",
+            daemon=True,
+        )
+        refresh_thread.start()
+
+        # Track the DHCP line so a lease that arrives AFTER the result was
+        # shown (typical when CDP/LLDP wins before DHCP completes) updates
+        # the display without waiting for the next switch advertisement.
+        last_ip_line = [_format_ip_line(interface)]
 
         while not shutdown_event.is_set():
             if not _read_carrier(interface):
@@ -742,25 +1166,6 @@ def run() -> None:
                     _show(display, lines, force=True, protocol=best.get("protocol", ""))
                     history.save_port_snapshot(best, lines)
                     log.info("DHCP state changed — display updated | %s", new_ip)
-
-                # A lease is present but the device gave no description
-                # (source NONE or LOCAL) — try fetching the real ifAlias.
-                # Checked every pass, NOT only on an IP-line change: with
-                # the link-up DHCP kick the lease often arrives before the
-                # first render, so no "change" event would ever fire.
-                if (
-                    last_ip_line[0] != "IP: --"
-                    and not desc_fetch_started[0]
-                    and bool(getattr(config, "SNMP_ENABLED", False))
-                    and current_result[0].get("port_desc_source") in ("NONE", "LOCAL")
-                    and current_result[0].get("port")
-                ):
-                    desc_fetch_started[0] = True
-                    threading.Thread(
-                        target=_late_desc_fetch,
-                        name="rf-late-desc",
-                        daemon=True,
-                    ).start()
 
             # If result was partial and not yet displayed, check the timer.
             # Show partial data after PARTIAL_DISPLAY_DELAY even if we still

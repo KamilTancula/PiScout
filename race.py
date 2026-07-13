@@ -5,8 +5,8 @@ Parallel discovery race — runs all discovery methods simultaneously and
 returns the fastest valid result.
 
 Two methods run in parallel as threads:
-  1. SNMP discovery   (discover_snmp)    — primary path, fastest on most networks
-  2. Passive LLDP/CDP (discover_passive) — fallback when SNMP unavailable
+  Passive LLDP/CDP discovery (discover_passive) — the only discovery path.
+  This fork is passive-only: it never queries switches over SNMP/SSH/etc.
 
 A third thread runs a persistent CDP burst throughout the discovery window.
 
@@ -27,14 +27,13 @@ What this file does:
   - Open passive listener socket first
   - Wait for socket confirmation before sending triggers
   - Start persistent CDP burst thread
-  - Spawn SNMP and passive discovery threads
+  - Spawn the passive discovery thread
   - Return the first valid result from either thread
   - Cancel all threads once a winner is found
 
 What this file does NOT do:
   - Implement any discovery logic
   - Parse frames
-  - Query SNMP
   - Talk to the display
 """
 
@@ -47,7 +46,6 @@ from typing import Optional
 
 import config
 import discover_passive
-import discover_snmp
 import trigger
 
 
@@ -92,12 +90,6 @@ def run(
 
     result_queue: queue.Queue = queue.Queue()
 
-    # SNMP participates in the race when enabled (default). In v3 mode
-    # it authenticates as a dedicated read-only user (e.g. ITTools) with
-    # a single credential attempt — no community guessing.
-    snmp_enabled = bool(getattr(config, "SNMP_ENABLED", False))
-    num_threads  = 2 if snmp_enabled else 1
-
     def _run_passive() -> None:
         try:
             result = discover_passive.discover(
@@ -112,23 +104,6 @@ def run(
             result = None
             # Ensure socket_ready is set even on failure.
             socket_ready.set()
-
-        if result and not internal_stop.is_set() and not cancel_event.is_set():
-            result_queue.put(result)
-        else:
-            result_queue.put(_NO_RESULT)
-
-    def _run_snmp() -> None:
-        try:
-            result = discover_snmp.discover(
-                interface=interface,
-                local_mac=local_mac,
-                cancel_event=internal_stop,
-                timeout=timeout,
-            )
-        except Exception as exc:
-            log.exception("SNMP discovery thread raised an exception: %s", exc)
-            result = None
 
         if result and not internal_stop.is_set() and not cancel_event.is_set():
             result_queue.put(result)
@@ -160,25 +135,13 @@ def run(
         interface, internal_stop, src_mac=local_mac, interval=1.0
     )
 
-    # ---- Step 5: Start SNMP thread (only when enabled) ----
-    snmp_thread: Optional[threading.Thread] = None
-    if snmp_enabled:
-        snmp_thread = threading.Thread(
-            target=_run_snmp,
-            name="rf-snmp",
-            daemon=True,
-        )
-        snmp_thread.start()
-    else:
-        log.debug("Race: SNMP discovery disabled by config — passive only")
-
-    log.debug("Race: all discovery threads running on %s", interface)
+    log.debug("Passive discovery running on %s", interface)
 
     # ---- Step 6: Wait for first result ----
     winner:       Optional[dict] = None
     threads_done: int            = 0
 
-    while threads_done < num_threads:
+    while threads_done < 1:
         if cancel_event.is_set():
             log.debug("Race: cancelled by caller on %s", interface)
             internal_stop.set()
@@ -205,8 +168,6 @@ def run(
     # ---- Step 7: Clean up all threads ----
     internal_stop.set()
     burst_thread.join(timeout=2.0)
-    if snmp_thread is not None:
-        snmp_thread.join(timeout=5.0)
     passive_thread.join(timeout=5.0)
 
     if winner:

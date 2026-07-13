@@ -15,7 +15,7 @@
 #
 # What this script does:
 #   1.  Checks that it is running as root
-#   2.  Installs required system packages (including snmp tools)
+#   2.  Installs required system packages
 #   3.  Applies boot time optimizations (BT, HDMI, silent boot,
 #       serial console, cloud-init). WiFi and NetworkManager are KEPT
 #       in this fork — the device is managed over SSH via wlan0.
@@ -75,8 +75,7 @@ apt-get install -y \
     python3-lgpio \
     python3-rpi.gpio \
     python3-spidev \
-    fonts-dejavu-core \
-    snmp
+    fonts-dejavu-core
 
 info "System packages installed."
 
