@@ -289,6 +289,10 @@ class EPaperDisplay:
             # bypassing the normal minimum refresh interval.
             if self._important_fields_changed(normalized_lines):
                 force = True
+                # A port/VLAN/link change means the screen content is entirely
+                # new. Force a full refresh (Clear + redraw) so the previous
+                # text cannot bleed through a fast A2 update.
+                self.fast_refresh_count = self._fast_refresh_limit
 
             if not force and not self._refresh_allowed():
                 return False
@@ -523,7 +527,7 @@ class EPaperDisplay:
         wake it. After any hardware init, the fast refresh counter is
         reset to the limit so the next display call performs a full refresh.
         """
-        if not self.initialized:
+        if not self.initialized or self.sleeping:
             self.epd.init(self._EPD_MODE_1GRAY)
             self.initialized        = True
             self.sleeping           = False
