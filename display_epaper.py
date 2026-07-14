@@ -10,7 +10,7 @@ dimensions and rotates the image into panel orientation automatically.
 Refresh strategy (epd3in7 has no displayPartBaseImage/displayPartial):
 - Fast update : display_1Gray() with the A2 LUT — quick, minimal flash,
                 but accumulates ghosting over time.
-- Full refresh: Clear(0xFF, 1) followed by display_1Gray() — slower,
+- Full refresh: GC-waveform deep clear followed by display_1Gray() — slower,
                 visible flash, wipes ghosting completely.
 A counter forces a full refresh every N fast updates, exactly like the
 old partial-refresh scheme on the 2.13" panel.
@@ -194,7 +194,7 @@ class EPaperDisplay:
         """
         with self.lock:
             self._ensure_awake()
-            self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+            self._deep_clear()
             self.last_lines         = [""] * self.BODY_LINES
             self.last_refresh_time  = time.monotonic()
             self.fast_refresh_count = self._fast_refresh_limit
@@ -229,7 +229,7 @@ class EPaperDisplay:
             if clear_before_sleep:
                 try:
                     self._ensure_awake()
-                    self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+                    self._deep_clear()
                     self.last_lines        = [""] * self.BODY_LINES
                     self.last_refresh_time = time.monotonic()
                 except Exception:
@@ -306,7 +306,7 @@ class EPaperDisplay:
             if self.fast_refresh_count >= self._fast_refresh_limit:
                 # Full refresh: clear to white first, then draw. The white
                 # wipe plus redraw removes accumulated A2-LUT ghosting.
-                self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+                self._deep_clear()
                 self.epd.display_1Gray(buffer)
                 self.fast_refresh_count = 0
                 log.debug("Full refresh performed (ghost prevention or first render)")
@@ -326,7 +326,7 @@ class EPaperDisplay:
                         "Fast refresh failed. Falling back to full refresh.",
                         exc_info=True,
                     )
-                    self.epd.Clear(0xFF, self._EPD_MODE_1GRAY)
+                    self._deep_clear()
                     self.epd.display_1Gray(buffer)
                     self.fast_refresh_count = 0
 
@@ -518,6 +518,35 @@ class EPaperDisplay:
         """
         elapsed = time.monotonic() - self.last_refresh_time
         return elapsed >= self.min_refresh_interval
+
+    def _deep_clear(self):
+        """
+        Clear the panel using the GC (global clean) waveform.
+
+        The driver's Clear(color, 1) only loads the weak DU LUT, which
+        drives just the pixels the controller believes have changed. After
+        a sleep/init cycle the controller loses knowledge of the previous
+        frame, so DU leaves old text visible on the panel. The GC waveform
+        performs the full clean cycle and always leaves a truly white panel,
+        exactly like Clear(0xFF, 0) does in 4-gray mode.
+        """
+        epd = self.epd
+        linewidth = epd.width // 8 if epd.width % 8 == 0 else epd.width // 8 + 1
+        white = [0xFF] * (epd.height * linewidth)
+
+        epd.send_command(0x4E)
+        epd.send_data(0x00)
+        epd.send_data(0x00)
+        epd.send_command(0x4F)
+        epd.send_data(0x00)
+        epd.send_data(0x00)
+
+        epd.send_command(0x24)
+        epd.send_data2(white)
+
+        epd.load_lut(epd.lut_1Gray_GC)
+        epd.send_command(0x20)
+        epd.ReadBusy()
 
     def _ensure_awake(self):
         """
