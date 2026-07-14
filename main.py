@@ -79,6 +79,7 @@ def _create_display():
             auto_sleep=bool(getattr(config, "EPAPER_AUTO_SLEEP", True)),
             startup_mode=True,
             partial_refresh_limit=int(getattr(config, "EPAPER_PARTIAL_REFRESH_LIMIT", 8)),
+            sleep_delay=float(getattr(config, "EPAPER_SLEEP_DELAY", 60)),
         )
 
     if display_type == "lcd":

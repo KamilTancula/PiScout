@@ -96,6 +96,7 @@ class EPaperDisplay:
         auto_sleep=True,
         startup_mode=True,
         partial_refresh_limit=None,
+        sleep_delay=60,
     ):
         """
         Set up the display object.
@@ -117,11 +118,23 @@ class EPaperDisplay:
         partial_refresh_limit:
             Override for FAST_REFRESH_LIMIT. The parameter keeps its old
             name so existing config/main.py wiring continues to work.
+
+        sleep_delay:
+            Number of idle seconds before the panel is put to sleep when
+            auto_sleep is enabled. Discovery produces bursts of updates
+            after a single link-up (LLDP frame, merge, DHCP, late SNMP);
+            sleeping immediately after each render would force a full
+            flashing refresh for every one of them, because waking from
+            deep sleep always requires a full refresh. Keeping the panel
+            awake for a grace period lets those follow-up updates use the
+            fast, flash-free A2 path.
         """
         self.font_path            = font_path or self.DEFAULT_FONT_PATH
         self.min_refresh_interval = min_refresh_interval
         self.auto_sleep           = auto_sleep
         self.startup_mode         = startup_mode
+        self._sleep_delay         = max(1.0, float(sleep_delay))
+        self._sleep_timer         = None
 
         # Allow the limit to be overridden at construction time.
         self._fast_refresh_limit = (
@@ -209,7 +222,43 @@ class EPaperDisplay:
         The image remains visible on screen after sleep.
         """
         with self.lock:
+            self._cancel_sleep_timer()
             if not self.initialized or self.sleeping:
+                return
+            self.epd.sleep()
+            self.sleeping = True
+
+    def _cancel_sleep_timer(self):
+        """Cancel a pending deferred-sleep timer, if any."""
+        if self._sleep_timer is not None:
+            self._sleep_timer.cancel()
+            self._sleep_timer = None
+
+    def _schedule_sleep(self):
+        """
+        Arm (or re-arm) the deferred sleep timer.
+
+        Each render pushes the sleep moment back by sleep_delay seconds,
+        so the panel only sleeps after a quiet period with no updates.
+        """
+        self._cancel_sleep_timer()
+        self._sleep_timer = threading.Timer(self._sleep_delay, self._sleep_if_idle)
+        self._sleep_timer.daemon = True
+        self._sleep_timer.start()
+
+    def _sleep_if_idle(self):
+        """
+        Timer callback: sleep the panel only if it is still idle.
+
+        A render may have happened while this callback was waiting for the
+        lock; in that case a newer timer is armed and this one must not
+        put the panel to sleep.
+        """
+        with self.lock:
+            if not self.initialized or self.sleeping:
+                return
+            idle = time.monotonic() - self.last_refresh_time
+            if idle + 0.25 < self._sleep_delay:
                 return
             self.epd.sleep()
             self.sleeping = True
@@ -223,6 +272,7 @@ class EPaperDisplay:
             Leave False so the last result stays visible on screen.
         """
         with self.lock:
+            self._cancel_sleep_timer()
             if not self.initialized:
                 return
 
@@ -335,7 +385,10 @@ class EPaperDisplay:
             self.last_refresh_time = time.monotonic()
 
             if self.auto_sleep and not self.startup_mode:
-                self.sleep()
+                # Do not sleep immediately: a single link-up produces a burst
+                # of updates (LLDP, merge, DHCP, late SNMP). Sleeping between
+                # them would force a full flashing refresh for each one.
+                self._schedule_sleep()
 
             return True
 
