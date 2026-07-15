@@ -100,20 +100,54 @@ else
 fi
 
 # ---- 3. Mount image and populate /data --------------------
-info "Mounting data image to verify and populate..."
+info "Preparing to migrate existing data into the image..."
+
+# CRITICAL ordering: back up the CURRENT /data/piscout BEFORE mounting the
+# new image over /data. Once the loop image is mounted on /data, the old
+# contents are hidden behind the mountpoint — copying "from /data" at that
+# point would copy the empty image onto itself and the real inventory map,
+# port snapshots and history would be lost on the next boot.
+BACKUP_DIR=""
+if [[ -d /data/piscout ]] && ! mountpoint -q "$DATA_MOUNT"; then
+    BACKUP_DIR="$(mktemp -d)"
+    info "Backing up existing /data/piscout to $BACKUP_DIR ..."
+    cp -a /data/piscout "$BACKUP_DIR/"
+fi
+
+# Ensure the image is always unmounted and the temp backup always removed,
+# even if a command below fails (set -e) — never leave a half-mounted image
+# or a stray backup directory behind.
+_cleanup_ro() {
+    if mountpoint -q "$DATA_MOUNT"; then
+        umount "$DATA_MOUNT" 2>/dev/null || true
+    fi
+    if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+        rm -rf "$BACKUP_DIR"
+    fi
+}
+trap _cleanup_ro EXIT
+
+info "Mounting data image to populate..."
 mkdir -p "$DATA_MOUNT"
 mount -o loop "$DATA_IMG" "$DATA_MOUNT"
 mkdir -p "$DATA_MOUNT/piscout"
 chmod 755 "$DATA_MOUNT/piscout"
 
-# Copy any existing history data if present.
-if [[ -d /data/piscout ]] && mountpoint -q "$DATA_MOUNT"; then
-    # We just mounted fresh — copy from original /data if it had content.
-    true
+# Restore the backed-up data into the freshly mounted image.
+if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR/piscout" ]]; then
+    info "Restoring existing data into the image..."
+    cp -a "$BACKUP_DIR/piscout/." "$DATA_MOUNT/piscout/"
+    info "Data restored: $(find "$DATA_MOUNT/piscout" -type f | wc -l) file(s)."
 fi
 
+sync
 umount "$DATA_MOUNT"
-info "Data image verified."
+if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+    rm -rf "$BACKUP_DIR"
+    BACKUP_DIR=""
+fi
+trap - EXIT
+info "Data image populated and verified."
 
 # ---- 4. Update /etc/fstab ---------------------------------
 info "Updating /etc/fstab..."
