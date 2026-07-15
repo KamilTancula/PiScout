@@ -266,61 +266,6 @@ def _record_debug_log(result: dict, history_dir: Path) -> None:
 
 
 # ============================================================
-# Per-port snapshot files
-# ============================================================
-
-def _safe_filename_part(text: str, fallback: str) -> str:
-    """
-    Turn a switch/port name into a filesystem-safe filename fragment.
-    Keeps letters, digits, dots and dashes; everything else becomes "-".
-    """
-    text = str(text or "").strip()
-    if not text:
-        return fallback
-    cleaned = "".join(
-        ch if (ch.isalnum() or ch in ".-") else "-" for ch in text
-    )
-    return cleaned.strip("-") or fallback
-
-
-def _save_port_snapshot(result: dict, display_lines: list, history_dir: Path) -> None:
-    """
-    Write a human-readable snapshot of what the display shows for this
-    port to PORT_HISTORY_PATH/ports/<switch>_<port>.txt.
-
-    One file per (switch, port) pair, ALWAYS overwritten — each file
-    holds exactly one entry: the most recent state of that port. This
-    gives a readable per-port record when walking through ports during
-    testing or documentation.
-    """
-    ports_dir = history_dir / "ports"
-    if not _ensure_dir(ports_dir):
-        return
-
-    switch_part = _safe_filename_part(result.get("switch_name", ""), "unknown-switch")
-    port_part   = _safe_filename_part(result.get("port", ""),        "unknown-port")
-    snapshot    = ports_dir / f"{switch_part}_{port_part}.txt"
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    body_lines = [str(line) for line in (display_lines or []) if str(line).strip()]
-
-    content = (
-        "PiScout port snapshot\n"
-        f"Updated:  {timestamp}\n"
-        f"Protocol: {result.get('protocol', '')}\n"
-        "\n"
-        + "\n".join(body_lines)
-        + "\n"
-    )
-
-    try:
-        snapshot.write_text(content, encoding="utf-8")
-        log.debug("History: port snapshot written to %s", snapshot)
-    except OSError as exc:
-        log.warning("History: could not write port snapshot %s: %s", snapshot, exc)
-
-
-# ============================================================
 # Public entry point
 # ============================================================
 

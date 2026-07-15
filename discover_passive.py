@@ -41,16 +41,13 @@ import config
 log = logging.getLogger(__name__)
 
 # Fields that must be non-empty for a parsed result to be considered useful.
-# Only switch_name is required — VLAN is intentionally excluded because some
-# switches (notably FortiSwitch) do not reliably advertise the access VLAN in
-# LLDP packets. Requiring VLAN would cause the display to never update on those
-# switches even when the switch name, IP, and port were parsed successfully.
-_REQUIRED_FIELDS = ("switch_name",)
-
-# Fields that must all be present for a result to be considered "complete".
-# A result that passes _has_useful_data but not _is_complete is marked as
-# partial and held for PARTIAL_DISPLAY_DELAY seconds before being shown.
-_COMPLETE_FIELDS = ("switch_name", "port")
+# A result identifies the switch by EITHER its System Name OR its chassis
+# MAC. Huawei VRP and some other vendors may omit the System Name TLV while
+# still sending Chassis ID (MAC) — such a result is useful, and the local
+# inventory map can match on the MAC. VLAN is intentionally excluded from
+# both checks because some switches (notably FortiSwitch) do not reliably
+# advertise the access VLAN in LLDP.
+_EMPTY_VALUES = {"", "Unknown", "None", "N/A"}
 
 
 def _get_receive_timeout() -> float:
@@ -91,37 +88,39 @@ def _parse_frame(protocol: str, frame: bytes) -> Optional[dict]:
     return None
 
 
+def _has_identity(parsed: dict) -> bool:
+    """True if the result identifies the switch by name OR chassis MAC."""
+    name = str(parsed.get("switch_name", "")).strip()
+    mac  = str(parsed.get("switch_mac", "")).strip()
+    return (name not in _EMPTY_VALUES) or (mac not in _EMPTY_VALUES)
+
+
 def _has_useful_data(parsed: Optional[dict]) -> bool:
     """
-    Return True if the parsed result contains at least a switch name.
+    Return True if the parsed result identifies the switch by name OR
+    chassis MAC.
 
-    Deliberately does not require VLAN. FortiSwitch and some other vendors
-    omit the port VLAN ID TLV in LLDP packets. A result without VLAN is
-    still useful — it will be marked as partial but displayed after a delay.
+    Deliberately does not require VLAN or even a switch name specifically —
+    a chassis MAC alone is enough identity for the local map (keyed by MAC)
+    to work. A result missing VLAN or name is still useful; it will be
+    marked partial and displayed after a delay.
     """
     if not parsed:
         return False
-    for field in _REQUIRED_FIELDS:
-        value = parsed.get(field, "")
-        if not value or str(value).strip() in ("", "Unknown", "None"):
-            return False
-    return True
+    return _has_identity(parsed)
 
 
 def _is_complete(result: dict) -> bool:
     """
     Return True if the result has all fields needed for a full display.
 
-    A result is complete when switch_name AND port are both present.
+    Complete = identity (switch_name OR switch_mac) AND port present.
     VLAN is deliberately excluded — its absence does not make a result
     incomplete since some switches never advertise it.
     """
-    _empty = {"", "Unknown", "None", "N/A"}
-    for field in _COMPLETE_FIELDS:
-        val = str(result.get(field, "")).strip()
-        if not val or val in _empty:
-            return False
-    return True
+    if not _has_identity(result):
+        return False
+    return str(result.get("port", "")).strip() not in _EMPTY_VALUES
 
 
 def _normalize(parsed: dict, protocol_label: str) -> dict:
