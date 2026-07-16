@@ -25,6 +25,8 @@
 #   8.  Clones the Waveshare e-Paper library and copies the driver
 #   9.  Sets correct file permissions
 #   10. Installs and enables the systemd service
+#   11. Configures wlan0 as a permanent Wi-Fi AP for field SSH
+#       management (prompts for SSID + password)
 # ============================================================
 
 set -euo pipefail
@@ -199,24 +201,28 @@ touch /etc/cloud/cloud-init.disabled 2>/dev/null || true
 # is exactly what the discovery engine needs.
 info "NetworkManager kept (manages wlan0 for SSH and eth0 via DHCP)."
 
-# Create a dedicated NM profile for eth0 with a HIGH route metric so the
-# default route and DNS stay on WiFi. Without this, plugging eth0 into a
-# test switch hijacks the default route (wired metric 100 beats wifi 600),
-# killing Internet access and DNS over the management WiFi link.
-# ipv4.ignore-auto-dns keeps resolv.conf pointed at the WiFi-provided DNS.
+# Create a dedicated NM profile for eth0 as a plain DHCP client.
+# In this branch wlan0 is a permanent Access Point (no uplink), so eth0
+# is the ONLY path to the Internet. It must therefore carry the default
+# route AND the DNS servers, otherwise 'git pull' over the cable cannot
+# resolve github.com. (The old high-metric / ignore-auto-dns tuning was
+# for the previous design where wlan0 was a client providing Internet.)
 if command -v nmcli >/dev/null 2>&1; then
     if nmcli -t -f NAME connection show 2>/dev/null | grep -qx "piscout-eth0"; then
         info "NetworkManager profile 'piscout-eth0' already exists."
+        # Ensure an existing profile also provides DNS (older installs
+        # may still carry ignore-auto-dns from the previous design).
+        nmcli connection modify piscout-eth0 ipv4.ignore-auto-dns no 2>/dev/null || true
+        nmcli connection modify piscout-eth0 ipv4.route-metric -1 2>/dev/null || true
     else
         nmcli connection add type ethernet ifname eth0 con-name piscout-eth0 \
             connection.autoconnect yes connection.autoconnect-priority 100 \
-            ipv4.method auto ipv4.route-metric 700 ipv4.ignore-auto-dns yes \
-            ipv6.method disabled >/dev/null 2>&1 \
-            && info "NM profile 'piscout-eth0' created (route metric 700, DHCP DNS ignored)." \
-            || warn "Could not create NM profile 'piscout-eth0' — check metrics manually."
+            ipv4.method auto ipv6.method disabled >/dev/null 2>&1 \
+            && info "NM profile 'piscout-eth0' created (DHCP with DNS for updates)." \
+            || warn "Could not create NM profile 'piscout-eth0' — check it manually."
     fi
 else
-    warn "nmcli not found — configure eth0 route metric manually if needed."
+    warn "nmcli not found — configure eth0 manually if needed."
 fi
 
 # Remove serial console from cmdline.txt — it adds latency on boot
@@ -371,6 +377,22 @@ systemctl restart "${SERVICE_NAME}.service"
 
 info "Service installed and started."
 
+# ---- 12. Wi-Fi Access Point (field SSH management) --------
+# Turn wlan0 into a permanent Access Point so the device is always
+# reachable over SSH, independently of what eth0 is plugged into.
+# This step is interactive: it prompts for the SSID and password.
+info "Configuring Wi-Fi Access Point..."
+
+AP_SETUP="$INSTALL_DIR/setup_wifi_ap.sh"
+if [[ -f "$AP_SETUP" ]]; then
+    bash "$AP_SETUP" \
+        || warn "Wi-Fi AP setup did not complete — run it manually later:
+  sudo bash $AP_SETUP"
+else
+    warn "setup_wifi_ap.sh not found in $INSTALL_DIR — skipping AP setup.
+Configure the management AP manually or re-pull the repository."
+fi
+
 # ---- Done -------------------------------------------------
 echo ""
 info "================================================"
@@ -392,5 +414,9 @@ warn "  - Serial console removed"
 warn "  - SPI enabled (if newly configured)"
 warn "  - udev rule for eth0 fast activation"
 warn "  - WiFi and NetworkManager kept (SSH management over wlan0)"
+warn "  - Wi-Fi Access Point on wlan0 (verify it comes up after reboot)"
+warn ""
+warn "After reboot: connect a laptop to the AP SSID and confirm SSH to the"
+warn "AP address (default 10.42.0.1) works with no action needed on the Pi."
 warn ""
 warn "Run: sudo reboot"
