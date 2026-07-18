@@ -85,6 +85,40 @@ def _normalize_mac(value: str) -> str:
     return hex_chars if len(hex_chars) == 12 else ""
 
 
+def _merge_ports(
+    target: dict,
+    sources: dict,
+    device_key: str,
+    ports: dict,
+    source_file: str,
+) -> None:
+    """
+    Merge one device's normalized {port: desc} entries into a target map
+    (by_name or by_mac), warning when a later file overrides a port
+    description already set by an earlier one.
+
+    Policy: last write wins — deterministic, because files load in sorted
+    order — but every real override is logged as a WARNING so a silent
+    clobber can't hide a wrong description on screen. `sources` maps each
+    (device, port) to the file that last set it, so the warning can name
+    both the previous and the new file. Identical redefinitions are not
+    conflicts and stay silent (no data is lost, so no noise).
+    """
+    bucket = target.setdefault(device_key, {})
+    for port_clean, desc_clean in ports.items():
+        skey = (device_key, port_clean)
+        existing = bucket.get(port_clean)
+        if existing is not None and existing != desc_clean:
+            log.warning(
+                "Duplicate port alias overwritten | device=%s port=%s "
+                "old=%r new=%r old_file=%s new_file=%s",
+                device_key, port_clean, existing, desc_clean,
+                sources.get(skey, "?"), source_file,
+            )
+        bucket[port_clean] = desc_clean
+        sources[skey] = source_file
+
+
 def _load() -> None:
     """(Re)load all map files if anything changed on disk."""
     directory = _devices_dir()
@@ -99,6 +133,10 @@ def _load() -> None:
 
     by_name: dict = {}
     by_mac:  dict = {}
+    # Track which file last set each (device, port) in each space, so an
+    # override across files can be reported with both filenames.
+    name_sources: dict = {}
+    mac_sources:  dict = {}
 
     for path in files:
         try:
@@ -124,11 +162,10 @@ def _load() -> None:
 
             mac = _normalize_mac(device_key)
             if mac:
-                by_mac.setdefault(mac, {}).update(normalized)
+                _merge_ports(by_mac, mac_sources, mac, normalized, path.name)
             else:
-                by_name.setdefault(
-                    str(device_key).strip().lower(), {}
-                ).update(normalized)
+                name_key = str(device_key).strip().lower()
+                _merge_ports(by_name, name_sources, name_key, normalized, path.name)
 
     _cache["stamp"]   = stamp
     _cache["by_name"] = by_name
