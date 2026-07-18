@@ -183,15 +183,33 @@ def _extract_model(tlvs: dict[int, list[bytes]]) -> str:
     """
     Extract the switch model from the System Description TLV (type 6).
 
-    The description is free text - e.g. Cisco SG500 sends
-    "SG500-52 52-Port Gigabit Stackable Managed Switch". Only the first
-    line is used; display-side truncation handles the length.
+    The description is free text and is often MULTI-LINE:
+      - Cisco SG500 sends a single line, e.g.
+        "SG500-52 52-Port Gigabit Stackable Managed Switch".
+      - Huawei VRP sends several CRLF-separated lines and leads with the
+        model, e.g. on an S5735-L48T4X-A:
+        "Huawei Switch S5735-L48T4X-A\r\nHuawei Versatile Routing ...".
+
+    Only the first line is the model, so it must be isolated BEFORE
+    sanitize_display_string() runs: that function strips control
+    characters (including CR/LF), which would otherwise collapse the
+    whole multi-line description into a single unusable string.
+    Display-side truncation handles the remaining length.
     """
     values = tlvs.get(_TLV_SYS_DESCR, [])
     if not values:
         return ""
-    descr = _decode_string(values[0])
-    return descr.splitlines()[0].strip() if descr else ""
+    try:
+        raw = values[0].decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raw = values[0].decode("latin-1").strip()
+
+    # Isolate the first non-empty line while CR/LF are still present,
+    # then sanitize just that line for display.
+    for line in raw.replace("\r", "\n").split("\n"):
+        if line.strip():
+            return sanitize_display_string(line.strip())
+    return ""
 
 
 def _extract_system_name(tlvs: dict[int, list[bytes]]) -> str:
