@@ -40,6 +40,7 @@ import json
 import logging
 import logging.handlers
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,16 @@ import config
 
 
 log = logging.getLogger(__name__)
+
+
+# Serialize disk writes. Several discovery paths (an LLDP/CDP data
+# change, a partial->complete upgrade, and a DHCP lease arriving) can
+# call into this module from different threads at nearly the same time.
+# One lock guards the history.jsonl read-modify-write; another guards
+# the per-port TXT+JSON snapshot pair so each pair is written as a single
+# logical unit and concurrent writers can't interleave temp files.
+_history_lock  = threading.Lock()
+_snapshot_lock = threading.Lock()
 
 
 # ============================================================
@@ -308,28 +319,43 @@ def save_port_snapshot(result: dict, display_lines: Optional[list] = None) -> No
             f"{body}\n"
         )
 
-        # Atomic write: never leave a half-written file behind if power
-        # is cut mid-write (this device is unplugged without warning).
-        tmp_path = path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-
-        # Twin JSON file with the FULL, untruncated result — the .txt
-        # holds display lines (already shortened to fit the screen),
-        # while the .json preserves e.g. the complete switch model
-        # string and the description source for later processing.
+        # The .txt (display lines, already shortened to fit the screen)
+        # and the twin .json (FULL untruncated result — e.g. the complete
+        # switch model string and description source) form ONE logical
+        # snapshot for this port. Serialize the whole pair under a single
+        # lock so concurrent discovery paths can't interleave temp files.
         json_path = path.with_suffix(".json")
+        tmp_path  = path.with_suffix(".tmp")
+        tmp_json  = json_path.with_suffix(".jtmp")
         payload = {
             "updated":       timestamp,
             **{k: v for k, v in result.items()},
             "display_lines": [str(line) for line in display_lines],
         }
-        tmp_json = json_path.with_suffix(".jtmp")
-        with open(tmp_json, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp_json, json_path)
+
+        with _snapshot_lock:
+            try:
+                # Atomic writes: never leave a half-written file behind
+                # if power is cut mid-write (device unplugged without
+                # warning). Write BOTH temp files first, then commit both
+                # with back-to-back renames, so a failure while writing
+                # either file commits neither and TXT/JSON stay a pair.
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                with open(tmp_json, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+                os.replace(tmp_path, path)
+                os.replace(tmp_json, json_path)
+            finally:
+                # A committed file was already renamed away (unlink is a
+                # no-op); a temp left by a failed write is removed here so
+                # ports/ never accumulates *.tmp / *.jtmp.
+                for leftover in (tmp_path, tmp_json):
+                    try:
+                        leftover.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
         log.debug("Snapshot written: %s (+ .json)", path)
     except Exception as exc:
@@ -378,7 +404,8 @@ def record(result: dict, display_lines: Optional[list] = None) -> None:
 
     try:
         if mode == 1:
-            _record_port_history(result, history_dir, _get_limit())
+            with _history_lock:
+                _record_port_history(result, history_dir, _get_limit())
         elif mode == 2:
             _record_debug_log(result, history_dir)
     except Exception as exc:
