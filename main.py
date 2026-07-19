@@ -630,12 +630,32 @@ def run() -> None:
         # 1. Resets the stale timer on every switch re-advertisement
         # 2. Upgrades display from partial to complete when more data arrives
         # 3. Updates display if switch data changes (e.g. VLAN reassignment)
-        refresh_cancel  = threading.Event()
-        last_success_ts = [time.monotonic()]
-        current_result  = [result]
-        stale_shown     = False
+        refresh_cancel = threading.Event()
+        # Shared state between this monitor loop and the background passive
+        # refresh thread. The background thread is the sole PRODUCER (it
+        # updates result/last_success and bumps data_gen only when the
+        # displayed data actually changes); this loop is the sole CONSUMER
+        # (it renders to the panel and writes history). One lock keeps the
+        # two from racing on the panel or the snapshot files — the cause of
+        # double renders and double history entries.
+        state_lock = threading.Lock()
+        state = {
+            "result":       result,
+            "last_success": time.monotonic(),
+            "data_gen":     0,      # bumps only when the displayed result changes
+            "was_upgrade":  False,  # sticky: a partial->complete upgrade is pending
+        }
+        stale_shown       = False
+        last_rendered_gen = 0
 
         def _passive_refresh():
+            """
+            Background producer: listen for switch re-advertisements and
+            publish updated state. It NEVER renders or writes history — the
+            monitor loop is the sole consumer that does that. It only
+            refreshes last_success (stale timer) and bumps data_gen when the
+            displayed data actually changes.
+            """
             while not shutdown_event.is_set() and not refresh_cancel.is_set():
                 fresh = discover_passive.discover(
                     interface=interface,
@@ -646,42 +666,33 @@ def run() -> None:
                 if not fresh or refresh_cancel.is_set():
                     continue
 
-                fresh = _merge_result(current_result[0], fresh)
+                # This thread is the only writer of state["result"], so
+                # reading the previous value for the merge is safe; the lock
+                # is held only for the brief state publish below.
+                with state_lock:
+                    prev = state["result"]
+                fresh = _merge_result(prev, fresh)
                 fresh = port_aliases.apply(fresh)
-                last_success_ts[0] = time.monotonic()
+
+                is_upgrade   = prev.get("is_partial") and not fresh.get("is_partial")
+                data_changed = fresh != prev
+
+                with state_lock:
+                    state["last_success"] = time.monotonic()
+                    if is_upgrade or data_changed:
+                        state["result"]   = fresh
+                        state["data_gen"] += 1
+                        if is_upgrade:
+                            state["was_upgrade"] = True
+
                 log.debug(
-                    "Passive refresh | protocol=%s switch=%s port=%s partial=%s",
+                    "Passive refresh | protocol=%s switch=%s port=%s partial=%s changed=%s",
                     fresh.get("protocol"),
                     fresh.get("switch_name"),
                     fresh.get("port"),
                     fresh.get("is_partial"),
+                    is_upgrade or data_changed,
                 )
-
-                prev = current_result[0]
-                is_upgrade = prev.get("is_partial") and not fresh.get("is_partial")
-                data_changed = fresh != prev
-
-                if is_upgrade or data_changed:
-                    current_result[0] = fresh
-                    lines = build_display_lines(fresh, interface)
-                    _show(
-                        display,
-                        lines,
-                        force=True,
-                        protocol=fresh.get("protocol", ""),
-                    )
-                    if is_upgrade:
-                        history.record(fresh)
-                    history.save_port_snapshot(fresh, lines)
-                    log.info(
-                        "Display %s | protocol=%s switch=%s port=%s desc=%s vlan=%s",
-                        "upgraded from partial" if is_upgrade else "refreshed",
-                        fresh.get("protocol"),
-                        fresh.get("switch_name"),
-                        fresh.get("port"),
-                        fresh.get("port_desc"),
-                        fresh.get("vlan"),
-                    )
 
         refresh_thread = threading.Thread(
             target=_passive_refresh,
@@ -705,68 +716,95 @@ def run() -> None:
                 _show(display, build_waiting_for_link_lines(), force=True)
                 break
 
-            # Re-check the live DHCP state once per loop pass (1s cadence).
-            # A change (lease obtained or lost) re-renders the current
-            # result and refreshes the port snapshot file.
+            # Snapshot the shared state once per pass, then act on it. This
+            # loop is the ONLY place that renders and writes history.
+            with state_lock:
+                best            = state["result"]
+                cur_gen         = state["data_gen"]
+                last_success    = state["last_success"]
+                pending_upgrade = state["was_upgrade"]
+
+            now           = time.monotonic()
+            stale_elapsed = now - last_success
+
+            # (1) Render a data change produced by the background refresh
+            #     (partial->complete upgrade, or changed data such as a VLAN
+            #     reassignment). Only after the first result is on screen.
+            if displayed and cur_gen != last_rendered_gen:
+                lines = build_display_lines(best, interface)
+                _show(display, lines, force=True, protocol=best.get("protocol", ""))
+                if pending_upgrade:
+                    history.record(best)
+                    with state_lock:
+                        state["was_upgrade"] = False
+                history.save_port_snapshot(best, lines)
+                last_rendered_gen = cur_gen
+                last_ip_line[0]   = _format_ip_line(interface)
+                stale_shown       = False
+                log.info(
+                    "Display refreshed | protocol=%s switch=%s port=%s desc=%s vlan=%s",
+                    best.get("protocol"), best.get("switch_name"),
+                    best.get("port"), best.get("port_desc"), best.get("vlan"),
+                )
+
+            # (2) DHCP state change (only while a real result is on screen).
+            #     A lease obtained/lost re-renders and refreshes the snapshot.
             if displayed and not stale_shown:
                 new_ip = _format_ip_line(interface)
                 if new_ip != last_ip_line[0]:
                     last_ip_line[0] = new_ip
-                    best = current_result[0]
                     lines = build_display_lines(best, interface)
                     _show(display, lines, force=True, protocol=best.get("protocol", ""))
                     history.save_port_snapshot(best, lines)
                     log.info("DHCP state changed — display updated | %s", new_ip)
 
-            # If result was partial and not yet displayed, check the timer.
-            # Show partial data after PARTIAL_DISPLAY_DELAY even if we still
-            # haven't received a complete result — something is better than nothing.
+            # (3) First display of a result: a partial shown after the delay
+            #     (something is better than nothing), or a complete result
+            #     that arrived during the partial wait.
             if not displayed:
-                partial_elapsed = time.monotonic() - result_at
+                partial_elapsed = now - result_at
+                reason = ""
                 if partial_elapsed >= partial_display_delay:
-                    best = current_result[0]
-                    protocol = best.get("protocol", "")
+                    reason = "after %.0fs partial-wait" % partial_elapsed
+                elif cur_gen != last_rendered_gen and not best.get("is_partial"):
+                    reason = "complete arrived during partial wait"
+                if reason:
                     display.set_startup_mode(False)
                     lines = build_display_lines(best, interface)
-                    _show(display, lines, force=True, protocol=protocol)
-                    displayed = True
-                    last_ip_line[0] = _format_ip_line(interface)
+                    _show(display, lines, force=True, protocol=best.get("protocol", ""))
+                    displayed         = True
+                    last_rendered_gen = cur_gen
+                    last_ip_line[0]   = _format_ip_line(interface)
                     history.record(best)
+                    with state_lock:
+                        state["was_upgrade"] = False
                     history.save_port_snapshot(best, lines)
                     log.info(
-                        "Partial result displayed after %.0fs delay | "
-                        "switch=%s port=%s vlan=%s",
-                        partial_elapsed,
-                        best.get("switch_name"),
-                        best.get("port"),
-                        best.get("vlan"),
-                    )
-                elif current_result[0] != result and not current_result[0].get("is_partial"):
-                    # Background refresh already got a complete result — show it now.
-                    best = current_result[0]
-                    protocol = best.get("protocol", "")
-                    display.set_startup_mode(False)
-                    lines = build_display_lines(best, interface)
-                    _show(display, lines, force=True, protocol=protocol)
-                    displayed = True
-                    last_ip_line[0] = _format_ip_line(interface)
-                    history.record(best)
-                    history.save_port_snapshot(best, lines)
-                    log.info(
-                        "Complete result arrived during partial wait | "
-                        "switch=%s port=%s vlan=%s",
-                        best.get("switch_name"),
-                        best.get("port"),
-                        best.get("vlan"),
+                        "Result displayed (%s) | switch=%s port=%s vlan=%s",
+                        reason, best.get("switch_name"),
+                        best.get("port"), best.get("vlan"),
                     )
 
-            # Show stale warning if no refreshed data within timeout window.
-            stale_elapsed = time.monotonic() - last_success_ts[0]
+            # (4) Restore the real result after a stale screen: a fresh
+            #     success has arrived (timer no longer stale) while the stale
+            #     screen is still up. Fires even if the data is unchanged, so
+            #     the panel never gets stuck on "stale" once the switch is back.
+            if stale_shown and stale_elapsed <= disc_timeout:
+                lines = build_display_lines(best, interface)
+                _show(display, lines, force=True, protocol=best.get("protocol", ""))
+                stale_shown       = False
+                last_rendered_gen = cur_gen
+                last_ip_line[0]   = _format_ip_line(interface)
+                log.info(
+                    "Neighbor data restored — cleared stale screen | switch=%s port=%s",
+                    best.get("switch_name"), best.get("port"),
+                )
+
+            # (5) Show stale warning if no successful refresh within the window.
             if not stale_shown and stale_elapsed > disc_timeout:
                 log.info(
                     "Neighbor data stale on %s (%.0fs since last success)",
-                    interface,
-                    stale_elapsed,
+                    interface, stale_elapsed,
                 )
                 _show(display, build_stale_lines(), force=True)
                 stale_shown = True
