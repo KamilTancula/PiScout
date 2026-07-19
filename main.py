@@ -125,10 +125,14 @@ def _merge_result(prev: Optional[dict], fresh: dict) -> dict:
     if not prev or not isinstance(fresh, dict):
         return fresh
 
-    same_port = (
-        shorten_interface_name(str(prev.get("port", "")).strip()).lower()
-        == shorten_interface_name(str(fresh.get("port", "")).strip()).lower()
-    )
+    prev_port  = shorten_interface_name(str(prev.get("port", "")).strip()).lower()
+    fresh_port = shorten_interface_name(str(fresh.get("port", "")).strip()).lower()
+    # An EMPTY fresh port does not disqualify the merge: a lean periodic
+    # frame that omits the Port ID is exactly the case merging exists for
+    # (same rule as same_switch below, where a missing name is not a
+    # mismatch). The cable has not moved — the port is inherited.
+    same_port = (not prev_port) or (not fresh_port) or (prev_port == fresh_port)
+
     prev_name  = str(prev.get("switch_name", "")).strip().lower()
     fresh_name = str(fresh.get("switch_name", "")).strip().lower()
     same_switch = (not prev_name or not fresh_name or prev_name == fresh_name)
@@ -138,12 +142,18 @@ def _merge_result(prev: Optional[dict], fresh: dict) -> dict:
 
     for key in (
         "switch_name", "switch_ip", "switch_mac", "switch_model",
-        "port_desc", "vlan", "voice_vlan",
+        "port", "port_desc", "vlan", "voice_vlan",
     ):
         if not str(fresh.get(key, "")).strip() and str(prev.get(key, "")).strip():
             fresh[key] = prev[key]
             if key == "port_desc":
                 fresh["port_desc_source"] = prev.get("port_desc_source", "")
+
+    # Inherited fields can turn a partial result into a complete one
+    # (e.g. a lean frame missing the port becomes complete once the port
+    # is filled from prev), so the flag must be recomputed — otherwise a
+    # complete merged result would still be treated as partial downstream.
+    fresh["is_partial"] = not discover_passive._is_complete(fresh)
     return fresh
 
 
