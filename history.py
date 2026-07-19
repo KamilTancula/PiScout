@@ -177,11 +177,15 @@ def _record_port_history(result: dict, history_dir: Path, limit: int) -> None:
     if len(entries) > limit:
         entries = entries[-limit:]
 
-    # Write to temp file then atomically rename.
+    # Write to temp file then atomically replace. os.replace() overwrites
+    # an existing target atomically on the same filesystem on BOTH Linux
+    # and Windows; Path.rename() raises FileExistsError on Windows when
+    # the target already exists, which would drop every entry after the
+    # first (and matches the os.replace() the snapshot writer already uses).
     try:
         content = "\n".join(json.dumps(e) for e in entries) + "\n"
         tmp_file.write_text(content, encoding="utf-8")
-        tmp_file.rename(history_file)
+        os.replace(tmp_file, history_file)
         log.debug(
             "History: recorded entry (%d/%d) | switch=%s port=%s",
             len(entries),
