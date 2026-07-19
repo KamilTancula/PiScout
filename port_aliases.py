@@ -34,6 +34,14 @@ Device keys may be either:
 Port keys are normalized the same way the display normalizes them, so
 "gi1/1/1", "Gi1/1/1" and "gigabitethernet1/1/1" all match.
 
+PREFER FULL interface names as port keys (e.g. "gigabitethernet1/1/1",
+"xgigabitethernet1/0/1"): because the map key and the discovered port
+pass through the SAME normalizer, a full-name key stays correct even if
+a new shortening token is added later (e.g. a future Huawei
+XGigabitEthernet -> XGE mapping renormalizes both sides identically).
+A short-form key only works if it matches the token in parse_utils —
+"xgi1/0/1" matches nothing today and would silently never fire.
+
 Priority of the description shown on screen (applied in apply()):
     1. Real description from the device (LLDP TLV 4 or SNMP ifAlias)
     2. Local map entry (marked with "*" on the display)
