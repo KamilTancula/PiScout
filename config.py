@@ -94,6 +94,18 @@ EPAPER_AUTO_SLEEP = True
 # Full refresh after this many partial refreshes to clear ghosting.
 EPAPER_PARTIAL_REFRESH_LIMIT = 8
 
+# Blank the e-paper panel on graceful shutdown (SIGTERM/SIGINT). The
+# e-paper image persists after power-off, so by default the last result
+# is wiped when the service stops — otherwise stale port info stays
+# "frozen" on screen while the device is unplugged. Set to 0/false/no/off
+# to leave the last result visible instead. LCD is unaffected (it loses
+# its image on power loss anyway).
+#   PS_EPAPER_CLEAR_ON_SHUTDOWN=0 python3 main.py
+EPAPER_CLEAR_ON_SHUTDOWN = (
+    os.environ.get("PS_EPAPER_CLEAR_ON_SHUTDOWN", "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+
 
 # ============================================================
 # --------------------- LCD SETTINGS -------------------------

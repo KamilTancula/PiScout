@@ -778,7 +778,17 @@ def run() -> None:
     # ---- Graceful shutdown ----
     log.info("Shutting down PiScout")
     try:
-        display.shutdown()
+        # The e-paper panel keeps its image after power-off, so blank it
+        # on shutdown (configurable) instead of leaving stale port info
+        # frozen on screen. LCD clears on power loss, so it needs nothing.
+        if _get_display_type() == "epaper":
+            display.shutdown(
+                clear_before_sleep=bool(
+                    getattr(config, "EPAPER_CLEAR_ON_SHUTDOWN", True)
+                )
+            )
+        else:
+            display.shutdown()
     except Exception as exc:
         log.debug("Display shutdown error: %s", exc)
 
