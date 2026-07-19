@@ -157,7 +157,7 @@ class EPaperDisplay:
         # Start at the limit so the first render always performs a full refresh.
         self.fast_refresh_count = self._fast_refresh_limit
 
-        # Save the last 6 normalized body lines shown on screen.
+        # Save the last 8 normalized body lines shown on screen.
         self.last_lines      = None
         self._last_protocol  = ""
 
@@ -309,15 +309,15 @@ class EPaperDisplay:
 
     def show_lines(self, lines, force=False, protocol=""):
         """
-        Show 6 body lines on the e-paper display.
+        Show 8 body lines on the e-paper display.
 
         The fixed "PiScout" header and underline are always drawn
         by this method. The caller does not need to include a header in lines.
 
         lines:
-            A list of up to 6 body text strings to show below the header.
+            A list of up to 8 body text strings to show below the header.
             Missing lines are filled with blank strings. Expected order:
-            SW, IP, PORT, DESC, VLAN, LINK.
+            SW, PORT, VLAN, DESC, IP, DHCP, MAC, MODEL.
 
         force:
             If True, refresh the display regardless of whether content changed
@@ -409,7 +409,11 @@ class EPaperDisplay:
 
             # Reset the counter so the forced refresh is always a full refresh.
             self.fast_refresh_count = self._fast_refresh_limit
-            return self.show_lines(self.last_lines, force=True)
+            # Re-pass the last protocol label — omitting it would redraw
+            # the header without the LLDP/CDP indicator.
+            return self.show_lines(
+                self.last_lines, force=True, protocol=self._last_protocol
+            )
 
     def get_status(self):
         """
@@ -466,7 +470,7 @@ class EPaperDisplay:
 
     def _render_image(self, body_lines, protocol=""):
         """
-        Turn the 6 normalized body lines into a 480x280 display image.
+        Turn the 8 normalized body lines into a 480x280 display image.
 
         Always draws the fixed "PiScout" header with an underline,
         then renders each body line below it.
@@ -612,11 +616,5 @@ class EPaperDisplay:
         if not self.initialized or self.sleeping:
             self.epd.init(self._EPD_MODE_1GRAY)
             self.initialized        = True
-            self.sleeping           = False
-            self.fast_refresh_count = self._fast_refresh_limit
-            return
-
-        if self.sleeping:
-            self.epd.init(self._EPD_MODE_1GRAY)
             self.sleeping           = False
             self.fast_refresh_count = self._fast_refresh_limit

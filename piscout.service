@@ -1,11 +1,11 @@
 [Unit]
 Description=PiScout network discovery display service
-# Use network-pre.target instead of network.target so the service starts
-# as soon as the network interface exists, without waiting for a full
-# network stack (DHCP lease, DNS, etc.) to be ready. PiScout
-# manages its own DHCP awareness via /proc/net/route polling.
+# Deliberately NOT ordered after network.target: the service must start
+# as early as possible, without waiting for the network stack (DHCP
+# lease, DNS) to be ready. PiScout monitors the carrier state itself
+# via sysfs and reads the eth0 address directly from the kernel (ioctl),
+# so no systemd network readiness is required.
 After=sysinit.target local-fs.target
-Wants=network-pre.target
 
 [Service]
 Type=simple

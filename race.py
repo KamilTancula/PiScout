@@ -19,9 +19,10 @@ Race condition fix:
 
 Persistent CDP burst:
   Rather than a one-shot burst at the start, CDP frames are sent continuously
-  at 100ms intervals throughout the entire discovery window. This maximises
+  at 1-second intervals throughout the entire discovery window. This maximises
   the chance of catching the switch's CDP polling cycle on platforms like
-  the Catalyst 6500 that do not support immediate CDP response.
+  the Catalyst 6500 that do not support immediate CDP response, without
+  flooding the port while LLDP does the real work.
 
 What this file does:
   - Open passive listener socket first
@@ -44,7 +45,6 @@ import queue
 import threading
 from typing import Optional
 
-import config
 import discover_passive
 import trigger
 

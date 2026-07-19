@@ -41,7 +41,6 @@ import logging
 import logging.handlers
 import os
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -118,7 +117,7 @@ def _build_entry(result: dict) -> dict:
     Build a history entry dict from a discovery result.
 
     Includes a human-readable timestamp using the system clock.
-    The Pi Zero 2W has no RTC — the clock syncs via NTP after boot.
+    The Raspberry Pi has no RTC — the clock syncs via NTP after boot.
     On networks without internet access the timestamp may be approximate.
     """
     return {

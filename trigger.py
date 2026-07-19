@@ -312,7 +312,7 @@ def _build_cdp_frame(src_mac: bytes, interface: str) -> bytes:
     device_id    = b"PiScout"
     port_id      = interface.encode("ascii")
     sw_version   = b"PiScout Network Discovery Tool"
-    platform     = b"Raspberry Pi Zero 2W"
+    platform     = b"Raspberry Pi 4 Model B"
     capabilities = struct.pack("!I", _CDP_CAPABILITY_HOST)
 
     device_id_tlv    = _build_cdp_tlv(_CDP_TLV_DEVICE_ID,    device_id)

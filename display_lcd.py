@@ -27,9 +27,9 @@ from waveshare_lcd import LCD_1in44
 from parse_utils import normalize_display_lines, shorten_interface_name
 
 
-# Index of the PORT line within the 6 body lines passed to show_lines.
-# SW=0, IP=1, PORT=2, VLAN=3, VOICE=4, LINK=5
-_PORT_LINE_INDEX = 2
+# Index of the PORT line within the 8 body lines passed to show_lines.
+# SW=0, PORT=1, VLAN=2, DESC=3, IP=4, DHCP=5, MAC=6, MODEL=7
+_PORT_LINE_INDEX = 1
 
 
 class LCDDisplay:
@@ -48,6 +48,10 @@ class LCDDisplay:
 
     # Default font file.
     DEFAULT_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    # Number of body lines, matching the layout produced by main.py:
+    # SW / PORT / VLAN / DESC / IP / DHCP / MAC / MODEL
+    BODY_LINES = 8
 
     # Basic colors for a small LCD UI.
     DEFAULT_BG_COLOR   = (0, 0, 0)
@@ -99,7 +103,7 @@ class LCDDisplay:
         self.initialized  = False
         self.backlight_on = False
 
-        # Save the last 5 lines shown on screen.
+        # Save the last 8 normalized lines shown on screen.
         self.last_lines = None
 
         # LCD driver object gets created during initialize().
@@ -170,7 +174,7 @@ class LCDDisplay:
             )
 
             self._show_image(image)
-            self.last_lines = ["", "", "", "", "", ""]
+            self.last_lines = [""] * self.BODY_LINES
 
     def set_startup_mode(self, enabled):
         """
@@ -188,7 +192,8 @@ class LCDDisplay:
         Show text on the LCD display.
 
         lines:
-            A list of up to 5 text lines to show on the screen.
+            A list of up to 8 text lines to show on the screen
+            (SW, PORT, VLAN, DESC, IP, DHCP, MAC, MODEL).
 
         force:
             If True, redraw even if the text did not change.
@@ -200,7 +205,7 @@ class LCDDisplay:
         with self.lock:
             self._ensure_initialized()
 
-            normalized_lines = normalize_display_lines(lines)
+            normalized_lines = normalize_display_lines(lines, self.BODY_LINES)
             prepared_lines   = self._prepare_lines_for_lcd(normalized_lines)
 
             if not force and prepared_lines == self.last_lines:
