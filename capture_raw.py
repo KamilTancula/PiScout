@@ -40,9 +40,23 @@ _LLDP_ETHERTYPE = 0x88CC
 _LLDP_DST_MAC   = b"\x01\x80\xc2\x00\x00\x0e"
 
 # CDP uses 802.3 frames (not Ethernet II) with LLC/SNAP encapsulation.
-# We identify CDP frames by destination MAC alone because 802.3 frames
-# do not carry an Ethertype in the normal position.
-_CDP_DST_MAC = b"\x01\x00\x0c\xcc\xcc\xcc"
+# The destination MAC alone is NOT sufficient to identify CDP: Cisco
+# sends UDLD, DTP, VTP and PAgP to the very same multicast address,
+# distinguished only by the SNAP protocol ID. UDLD in particular has a
+# header layout byte-for-byte compatible with CDP (version + flags +
+# checksum + type/length TLVs), so a UDLD frame parsed as CDP yields a
+# plausible-looking bogus result. The SNAP OUI + PID must match too.
+_CDP_DST_MAC  = b"\x01\x00\x0c\xcc\xcc\xcc"
+_CDP_LLC      = b"\xaa\xaa\x03"    # DSAP=0xAA, SSAP=0xAA, Control=0x03 (UI)
+_CDP_SNAP_OUI = b"\x00\x00\x0c"    # Cisco OUI
+_CDP_SNAP_PID = b"\x20\x00"        # CDP (UDLD=0x0111, DTP=0x2004, VTP=0x2003)
+
+# Offsets of the LLC/SNAP fields inside the 802.3 frame:
+#   14 bytes Ethernet header, then LLC (3), SNAP OUI (3), SNAP PID (2).
+_LLC_OFFSET      = 14
+_SNAP_OUI_OFFSET = 17
+_SNAP_PID_OFFSET = 20
+_SNAP_END_OFFSET = 22
 
 # Discard anything shorter than a standard Ethernet header.
 _MIN_FRAME_SIZE = 14
@@ -68,15 +82,23 @@ def _is_cdp_frame(frame: bytes) -> bool:
     """
     Return True if this Ethernet frame is a CDP frame.
 
-    CDP frames are sent to Cisco's multicast MAC 01:00:0C:CC:CC:CC.
-    We match on destination MAC only because CDP uses 802.3 framing
-    where the two bytes at offset 12 carry the frame length, not an
-    Ethertype, making Ethertype matching unreliable for CDP.
+    CDP frames are sent to Cisco's multicast MAC 01:00:0C:CC:CC:CC
+    using 802.3 framing with LLC/SNAP encapsulation. The destination
+    MAC is shared with UDLD, DTP, VTP and PAgP, so the LLC header and
+    the SNAP OUI + protocol ID (0x2000 = CDP) are verified as well —
+    otherwise e.g. a UDLD frame (whose header layout is byte-for-byte
+    compatible with CDP) would be parsed into a bogus neighbor result
+    that could win the discovery race over a genuine LLDP frame.
     """
-    if len(frame) < _MIN_FRAME_SIZE:
+    if len(frame) < _SNAP_END_OFFSET:
         return False
 
-    return frame[0:6] == _CDP_DST_MAC
+    return (
+        frame[0:6] == _CDP_DST_MAC
+        and frame[_LLC_OFFSET:_SNAP_OUI_OFFSET]      == _CDP_LLC
+        and frame[_SNAP_OUI_OFFSET:_SNAP_PID_OFFSET] == _CDP_SNAP_OUI
+        and frame[_SNAP_PID_OFFSET:_SNAP_END_OFFSET] == _CDP_SNAP_PID
+    )
 
 
 class RawCapture:
