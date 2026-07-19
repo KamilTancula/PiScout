@@ -567,10 +567,15 @@ def run() -> None:
 
             _wait_or_shutdown(shutdown_event, 0.5)
 
-        # Wait for the race thread to finish (it will exit quickly once
-        # cancel_event is set or when it completes naturally).
+        # Signal cancellation BEFORE joining. The monitor loop above exits
+        # on three paths: link lost (cancel_event already set), race
+        # finished (join returns immediately), or shutdown_event fired —
+        # and on that last path cancel_event was NOT yet set, so joining
+        # first would block a SIGTERM shutdown for the full 5s timeout
+        # while the race kept running. Setting the event first lets the
+        # race thread exit within one receive timeout.
+        cancel_event.set()
         race_thread.join(timeout=5.0)
-        cancel_event.set()  # Ensure all threads stop
 
         if shutdown_event.is_set():
             break
